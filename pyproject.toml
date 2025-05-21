@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=45", "wheel", "setuptools_scm>=6.2"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tRNA_zap"
+description = "A package for analyzing tRNA ionic current signal"
+version = "0.1.0"
+requires-python = ">=3.10"
+dependencies = [
+    "numba==0.61.2",
+    "numpy==2.2.6",
+    "pysam==0.22.0"]
+
+[tool.black]
+line-length = 88  # Slightly longer lines work well for scientific code
+
+[tool.isort]
+profile = "black"  # Makes isort compatible with black
+
+[flake8]
+max-line-length = 88
+extend-ignore = "E203"  # Black-compatible
