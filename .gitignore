@@ -32,6 +32,7 @@ env/
 .ipynb_checkpoints/
 *.swp
 *.swo
+*.ipynb*
 
 # OS specific files
 .DS_Store

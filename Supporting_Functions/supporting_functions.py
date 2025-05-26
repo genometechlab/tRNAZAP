@@ -9,6 +9,8 @@ import subprocess
 
 import pysam
 
+from Alignment_Functions import align_read
+
 
 def get_model_to_ref():
     """
@@ -192,4 +194,133 @@ def sort_bam(bam_path, index, out_dir, out_pre, threads):
     outpath = os.path.join(out_dir, f"{out_pre}.sorted.bam")
     subprocess.run(["samtools", "sort", "-@", str(threads), "-o", outpath])
 
+    return outpath
+
+
+# Comments written with assistance from Anthropic Claudi Sonnet v4.0
+def make_sub_bam(args_list):
+    """
+    Create a subset BAM file with aligned tRNA reads based on inference predictions.
+
+    This function processes an unaligned BAM file and creates a new BAM file containing
+    only the reads that were successfully classified as tRNA by the inference model.
+    Each included read is aligned against its predicted reference tRNA sequence using
+    the custom alignment algorithm.
+
+    The function is designed to work in a multiprocessing context, hence the args_list
+    parameter format that allows easy distribution across worker processes.
+
+    Args:
+        args_list (tuple): A tuple containing the following elements in order:
+            - read_id_set (set): Set of read IDs to include in the output BAM
+            - header_dict (dict): BAM header dictionary for the output file
+            - inference_dict (dict): Dictionary mapping read IDs to inference results.
+                Each entry should contain:
+                - 'pred': Reference sequence identifier for alignment
+                - 'trna_indices': Tuple of (start, end) positions for tRNA region
+            - ref_dict (dict): Dictionary mapping reference IDs to reference data.
+                Each entry should contain:
+                - 'reference_seq': The reference sequence string for alignment
+            - unaligned_bam_path (str): Path to the input unaligned BAM file
+            - outpath (str): Path where the output aligned BAM file will be written
+
+    Returns:
+        str: The output file path (same as the input outpath parameter)
+
+    Raises:
+        AssertionError: If CIGAR string length doesn't match query sequence length,
+            indicating an alignment inconsistency that needs investigation
+
+    Notes:
+        - Reads not present in both inference_dict and read_id_set are skipped
+        - The function validates CIGAR strings to ensure alignment integrity
+        - Output BAM file is automatically closed when the function completes
+        - Designed for use in parallel processing workflows
+
+    Examples:
+        >>> args = (read_ids, header, inferences, references, "input.bam", "output.bam")
+        >>> output_path = make_sub_bam(args)
+        >>> print(f"Aligned BAM written to: {output_path}")
+    """
+    # Unpack the argument tuple - this format allows easy multiprocessing distribution
+    (
+        read_id_set,  # Set of read IDs we want to include in output
+        header_dict,  # BAM header structure for output file
+        inference_dict,  # Model predictions mapping read_id -> tRNA classification
+        ref_dict,  # Reference sequences mapping ref_id -> sequence data
+        unaligned_bam_path,  # Input BAM file with unaligned reads
+        outpath,
+    ) = args_list  # Output path for the new aligned BAM file
+
+    # Open the unaligned BAM file for reading
+    # check_sq=False allows reading BAM files without proper SQ (sequence) headers
+    # This is common for unaligned BAM files that may not have reference info
+    ua_bam = pysam.AlignmentFile(unaligned_bam_path, check_sq=False)
+
+    # Create the output BAM file with proper header information
+    # Using context manager ensures file is properly closed even if errors occur
+    with pysam.AlignmentFile(outpath, "w", header=header_dict) as outf:
+        # Iterate through all reads in the input BAM file
+        # until_eof=True ensures we read the entire file, not just aligned regions
+        for read in ua_bam.fetch(until_eof=True):
+            # Filter reads: only process those that meet both criteria:
+            # 1. Have inference predictions (model classified them as tRNA)
+            # 2. Are in our target read ID set (additional filtering criterion)
+            if (
+                read.query_name not in inference_dict
+                or read.query_name not in read_id_set
+            ):
+                continue
+
+            # Extract the predicted reference sequence information
+            # The inference model tells us which tRNA reference this read best matches
+            assigned_ref = inference_dict[read.query_name]["pred"]
+            assigned_ref_sequence = ref_dict[inference_dict[read.query_name]["pred"]][
+                "reference_seq"
+            ]
+
+            # Perform the actual sequence alignment using our custom algorithm
+            # This creates a new AlignedSegment with proper CIGAR, coordinates, etc.
+            aligned_read = align_read(
+                read,
+                inference_dict[read.query_name],
+                assigned_ref,
+                assigned_ref_sequence,
+            )
+
+            # Handle unmapped reads - write them as-is without further processing
+            # These are reads where the alignment algorithm couldn't find a good match
+            if aligned_read.is_unmapped:
+                outf.write(aligned_read)
+                continue
+
+            # Validate the CIGAR string integrity by checking alignment length
+            # This is a critical quality control step to catch alignment bugs
+            cigar_len = 0
+            cig_stats = aligned_read.get_cigar_stats()
+
+            # Sum up all CIGAR operations that consume query sequence:
+            # - Index 1: Insertions (I) - bases in query not in reference
+            # - Index 4: Soft clips (S) - unaligned bases at read ends
+            # - Index 7: Matches (=) - exact matches between query and reference
+            # - Index 8: Mismatches (X) - substitutions between query and reference
+            cigar_len += cig_stats[0][1]  # Insertions
+            cigar_len += cig_stats[0][4]  # Soft clips
+            cigar_len += cig_stats[0][7]  # Matches
+            cigar_len += cig_stats[0][8]  # Mismatches
+
+            # Verify that our CIGAR operations account for the entire query sequence
+            # If this assertion fails, there's a bug in our alignment algorithm
+            # that needs immediate attention as it indicates data corruption
+            assert_fail_string = (
+                "CIGAR length mismatch:"
+                + f"{cigar_len=} {len(aligned_read.query_sequence)=}"
+                + f"{str(aligned_read)=}"
+            )
+            assert cigar_len == len(aligned_read.query_sequence), assert_fail_string
+
+            # Write the successfully aligned and validated read to the output BAM
+            outf.write(aligned_read)
+
+    # Return the output path for potential chaining or confirmation
     return outpath
