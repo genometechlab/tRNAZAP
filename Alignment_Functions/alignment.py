@@ -666,7 +666,9 @@ def subset_sequence(pysam_read, trna_indices):
     return reverse_sequence[start:stop][::-1], three_prime_slice, five_prime_slice
 
 
-def align_read(pysam_read, inference_dict_read, ref_index, ref_sequence):
+def align_read(
+    pysam_read, inference_dict_read, ref_index, ref_sequence, secondary=False
+):
     """
     Create a new alignment for a read against a tRNA reference sequence.
 
@@ -754,6 +756,10 @@ three_clip=max(0,three_slice))
     # Configure the alignment properties
     a.reference_start = 0  # Start at the beginning of the reference
     a.mapping_quality = 60  # High mapping quality (confident alignment)
+
+    if secondary:
+        a.mapping_quality = 60
+        a.flag = 256
 
     # Convert edit operations to CIGAR format for SAM/BAM compatibility
     # Also handle soft clipping of unaligned portions at both ends

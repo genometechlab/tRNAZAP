@@ -20,7 +20,9 @@ program_name = "tRNA_zap"
 version = "05_16_25_v0.1.2"
 
 
-def main(unaligned_bam, inference_list, out_dir, out_pre, threads, model):
+def main(
+    unaligned_bam, inference_list, out_dir, out_pre, threads, model, all_alignments
+):
     """Execute tRNA basecall alignment and inference workflow.
 
     This function orchestrates the entire tRNA-zap workflow: it loads the appropriate
@@ -89,6 +91,7 @@ def main(unaligned_bam, inference_list, out_dir, out_pre, threads, model):
         unaligned_bam,
         out_dir,
         out_pre,
+        all_alignments,
     )
 
     with Pool(threads) as p:
@@ -146,6 +149,15 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
+        "--all_alignments",
+        "-a",
+        default=False,
+        action="store_true",
+        help="Perform alignemnts for all reference options"
+        + "note this is extremely costly",
+    )
+
+    parser.add_argument(
         "--model",
         "-m",
         type=str,
@@ -165,4 +177,5 @@ if __name__ == "__main__":
         FLAGS.out_pre,
         FLAGS.threads,
         FLAGS.model,
+        FLAGS.all_alignments,
     )

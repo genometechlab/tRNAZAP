@@ -125,6 +125,7 @@ def make_parameter_list(
     unaligned_bam_path,
     out_dir,
     out_prefix,
+    all_alignments,
 ):
     """
     Make a list of parameters to multiprocess alignments.
@@ -153,6 +154,7 @@ def make_parameter_list(
             ref_dict,
             unaligned_bam_path,
             os.path.join(out_dir, f"{out_prefix}_{i}_temporary.bam"),
+            all_alignments,
         )
         for i in range(len(read_id_set))
     ]
@@ -250,6 +252,7 @@ def make_sub_bam(args_list):
         ref_dict,  # Reference sequences mapping ref_id -> sequence data
         unaligned_bam_path,  # Input BAM file with unaligned reads
         outpath,
+        all_alignments,
     ) = args_list  # Output path for the new aligned BAM file
 
     # Open the unaligned BAM file for reading
@@ -294,33 +297,122 @@ def make_sub_bam(args_list):
                 outf.write(aligned_read)
                 continue
 
-            # Validate the CIGAR string integrity by checking alignment length
-            # This is a critical quality control step to catch alignment bugs
-            cigar_len = 0
-            cig_stats = aligned_read.get_cigar_stats()
-
-            # Sum up all CIGAR operations that consume query sequence:
-            # - Index 1: Insertions (I) - bases in query not in reference
-            # - Index 4: Soft clips (S) - unaligned bases at read ends
-            # - Index 7: Matches (=) - exact matches between query and reference
-            # - Index 8: Mismatches (X) - substitutions between query and reference
-            cigar_len += cig_stats[0][1]  # Insertions
-            cigar_len += cig_stats[0][4]  # Soft clips
-            cigar_len += cig_stats[0][7]  # Matches
-            cigar_len += cig_stats[0][8]  # Mismatches
-
-            # Verify that our CIGAR operations account for the entire query sequence
-            # If this assertion fails, there's a bug in our alignment algorithm
-            # that needs immediate attention as it indicates data corruption
-            assert_fail_string = (
-                "CIGAR length mismatch:"
-                + f"{cigar_len=} {len(aligned_read.query_sequence)=}"
-                + f"{str(aligned_read)=}"
-            )
-            assert cigar_len == len(aligned_read.query_sequence), assert_fail_string
+            # Validate the cigar string <- remove for perfomance boost?
+            _ = check_cigar(aligned_read.get_cigar_stats(), aligned_read.query_sequence)
 
             # Write the successfully aligned and validated read to the output BAM
             outf.write(aligned_read)
 
+            # Check if a secondary alignments should be performed, if all_alignments
+            # Iterate and perform alignments giving a secondary mapping quality for
+            # Each of the subsequent alignments. If the all_alignments flag isn't set
+            # Then check for a 'gt' tag in the inference_dict. If there is a 'gt' in the
+            # Inference tag perform that alignment (mostly for alignment model
+            # Validation).
+            if all_alignments:
+                predicted_class = assigned_ref
+                for ref_index in ref_dict:
+                    assigned_ref = ref_dict[ref_index]["reference_name"]
+                    assigned_ref_sequence = ref_dict[ref_index]["reference_seq"]
+                    if predicted_class == assigned_ref:
+                        continue
+
+                        aligned_read = align_read(
+                            read,
+                            inference_dict[read.query_name],
+                            assigned_ref,
+                            assigned_ref_sequence,
+                            secondary=True,
+                        )
+
+                        # Handle unmapped reads - ignore them
+                        # These are reads where the alignment algorithm
+                        # Couldn't find a good match.
+                        # Generally caused by the signal segmenter
+                        # Producing too narrow of a window
+                        if aligned_read.is_unmapped:
+                            continue
+
+                        # Validate the cigar string <- remove for perfomance boost?
+                        _ = check_cigar(
+                            aligned_read.get_cigar_stats(), aligned_read.query_sequence
+                        )
+
+                        # Write the successfully aligned and validated read
+                        # To the output BAM
+                        outf.write(aligned_read)
+
+            else:
+                if "gt" in inference_dict[read.query_name]:
+                    assigned_ref = inference_dict[read.query_name]["gt"]
+                    assigned_ref_sequence = ref_dict[
+                        inference_dict[read.query_name]["gt"]
+                    ]["reference_seq"]
+
+                    aligned_read = align_read(
+                        read,
+                        inference_dict[read.query_name],
+                        assigned_ref,
+                        assigned_ref_sequence,
+                        secondary=True,
+                    )
+
+                    # Handle unmapped reads - ignore them
+                    # These are reads where the alignment algorithm
+                    # Couldn't find a good match.
+                    # Generally caused by the signal segmenter
+                    # Producing too narrow of a window
+                    if aligned_read.is_unmapped:
+                        continue
+
+                    # Validate the cigar string <- remove for perfomance boost?
+                    _ = check_cigar(
+                        aligned_read.get_cigar_stats(), aligned_read.query_sequence
+                    )
+
+                    # Write the successfully aligned and validated read
+                    # to the output BAM
+                    outf.write(aligned_read)
+
     # Return the output path for potential chaining or confirmation
     return outpath
+
+
+def check_cigar(cig_stats, query_sequence_len):
+    """
+    Validate read creation by asserting equality cigar and sequence lengths.
+
+    Args:
+        cig_stats: pysam formatted cigar stats
+        query_sequence_len: the length of the query sequence
+
+    Raises:
+        AssertionError: If CIGAR string length doesn't match query sequence length,
+            indicating an alignment inconsistency that needs investigation
+
+    Returns:
+        None
+    """
+    # Validate the CIGAR string integrity by checking alignment length
+    # This is a critical quality control step to catch alignment bugs
+    cigar_len = 0
+
+    # Sum up all CIGAR operations that consume query sequence:
+    # - Index 1: Insertions (I) - bases in query not in reference
+    # - Index 4: Soft clips (S) - unaligned bases at read ends
+    # - Index 7: Matches (=) - exact matches between query and reference
+    # - Index 8: Mismatches (X) - substitutions between query and reference
+    cigar_len += cig_stats[0][1]  # Insertions
+    cigar_len += cig_stats[0][4]  # Soft clips
+    cigar_len += cig_stats[0][7]  # Matches
+    cigar_len += cig_stats[0][8]  # Mismatches
+
+    # Verify that our CIGAR operations account for the entire query sequence
+    # If this assertion fails, there's a bug in our alignment algorithm
+    # that needs immediate attention as it indicates data corruption
+    assert_fail_string = (
+        "CIGAR length mismatch:" + f"{cigar_len=} {query_sequence_len=}"
+    )
+    assert cigar_len == query_sequence_len, assert_fail_string
+
+    return None
