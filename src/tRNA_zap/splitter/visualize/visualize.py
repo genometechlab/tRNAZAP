@@ -58,8 +58,11 @@ def visualize_from_results(
     # Get chunk size from results metadata
     chunk_size = results.chunk_size
     
-    # Get seq2seq logits
+    # Get seq2seq probs and preds
     logits = read_result.seq2seq_logits
+    probabilities = read_result.seq2seq_probs
+    predictions = read_result.seq2seq_preds
+
     if logits is None:
         raise ValueError(f"No seq2seq logits found for read {read_id}")
     
@@ -72,10 +75,6 @@ def visualize_from_results(
     
     # Prepare signal for visualization
     signal_scaled = _prepare_signal(signal, signal_scale)
-    
-    # Calculate probabilities and predictions
-    probabilities = F.softmax(torch.tensor(logits), dim=-1).numpy()
-    predictions = probabilities.argmax(axis=-1)
     
     # Apply CRF smoothing if requested
     predictions_smooth = None
