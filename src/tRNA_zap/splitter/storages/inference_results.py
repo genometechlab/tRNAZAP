@@ -42,7 +42,7 @@ class InferenceResults:
         """
         read_result = ReadResult(
             read_id=read_id,
-            logits=logits,
+            _logits=logits,
             num_chunks=num_chunks
         )
         self.add_result(read_result)
