@@ -1,5 +1,5 @@
-from .core.engine import Inference
-from .core.config import ModelConfig, ModelLoader
+from .inference import Inference
+from .config import ModelConfig, ModelLoader
 
 # Results
 from .storages import InferenceResults, InferenceMetadata, ReadResult
