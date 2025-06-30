@@ -1,0 +1,16 @@
+chunk_size: 54
+max_seq_len: 1200
+num_classes: 127
+num_classes_seq2seq: 4
+nhead: 4
+num_layers: 4
+hidden_size: 256
+dim_feedforward: 512
+dropout: 0.1
+positional_encoding_type: "sinusoidal"
+
+# Data type
+float_dtype: "float16"  # Options: float16, float32, float64
+
+# Model checkpoint
+checkpoint_path: "./checkpoints/zap_s54_c127.pth"
