@@ -177,7 +177,7 @@ class Inference:
         
         # Run inference
         print(f"Running inference on {len(read_ids)} reads...")
-        use_amp = self.config.float_dtype == "float16"
+        use_amp = self.config.float_dtype == "float16" and self.device!="cpu"
         
         with torch.no_grad():
             iterator = tqdm.tqdm(dataloader, desc="Processing") if show_progress else dataloader
@@ -195,14 +195,13 @@ class Inference:
                 
                 # Process each read in the batch
                 for i, read_id in enumerate(batch["metadata"]["read_id"]):
-                    # Extract logits for this read
-                    logits = {}
-                    for key, tensor in outputs.items():
-                        logits[key] = tensor[i].cpu().numpy()
-                    
+
                     # Calculate number of chunks
-                    num_tokens = batch["metadata"]["num_tokens"][i]
-                    num_chunks = int(np.ceil(num_tokens / self.config.chunk_size))
+                    num_chunks = int(batch["metadata"]["num_tokens"][i])
+                    
+                    logits = {}
+                    logits['seq_class'] = outputs['seq_class'][i].cpu().numpy()
+                    logits['seq2seq'] = outputs['seq2seq'][i].cpu().numpy()[:num_chunks]
                     
                     # Add to results
                     results.add(
