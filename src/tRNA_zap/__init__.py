@@ -1,1 +1,1 @@
-"""__init__.py."""
+from tRNA_zap.splitter import Inference, visualize_from_results
