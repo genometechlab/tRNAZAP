@@ -207,7 +207,7 @@ class Inference:
                     logits['seq2seq'] = outputs['seq2seq'][i].cpu().numpy()[:num_chunks]
                     
                     # Add to results
-                    results.add(
+                    results._add(
                         read_id=read_id,
                         logits=logits,
                         num_chunks=num_chunks
