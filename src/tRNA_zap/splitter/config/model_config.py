@@ -1,10 +1,11 @@
 import os
 import glob
 import torch
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields, MISSING
 from typing import Optional, Dict, Any
 import yaml
 import json
+import warnings
 
 from ..model import TransformerZAM_multitask
 from ..utils import load_weights
@@ -13,31 +14,60 @@ from ..utils import load_weights
 @dataclass
 class ModelConfig:
     """Configuration class for TransformerZAM model parameters."""
-    
     # Model architecture parameters
-    chunk_size: int = 4000
-    max_seq_len: int = 1000
-    num_classes: int = 1
-    num_classes_seq2seq: int = 4
-    nhead: int = 8
-    num_layers: int = 6
-    hidden_size: int = 512
-    dim_feedforward: int = 2048
-    dropout: float = 0.1
-    positional_encoding_type: str = "sinusoidal"
-    
+    chunk_size: int
+    max_seq_len: int
+    num_classes: int
+    num_classes_seq2seq: int
+    nhead: int
+    num_layers: int
+    hidden_size: int
+    dim_feedforward: int
+    positional_encoding_type: str
+    dropout: float
+
     # Training parameters
-    float_dtype: str = "float32"
+    float_dtype: str
     
     # Model checkpoint
-    checkpoint_path: Optional[str] = None
+    checkpoint_path: str
     work_dir: Optional[str] = None
+
+    # Labels names
+    label_names: Optional[dict] = None
+
+    @classmethod
+    def _check_fields(cls, dict_: dict) -> dict:
+        valid_config = {}
+        invalid_keys = []
+        valid_fields = {f.name for f in fields(cls)}
+        for k, v in dict_.items():
+            if k in valid_fields:
+                valid_config[k] = v
+            else:
+                invalid_keys.append(k)
+
+        required_fields = {
+            f.name for f in fields(cls)
+            if f.default is MISSING and f.default_factory is MISSING
+        }
+
+        missing = required_fields - valid_config.keys()
+        if missing:
+            raise ValueError(f"Missing required config fields: {', '.join(missing)}")
+
+        if len(invalid_keys)>=0:
+            warnings.warn(f"Model config received the following invalid keys: {', '.join(invalid_keys)}")
+
+        return valid_config
     
+
     @classmethod
     def from_yaml(cls, yaml_path: str) -> "ModelConfig":
         """Load configuration from YAML file."""
         with open(yaml_path, 'r') as f:
             config_dict = yaml.safe_load(f)
+        config_dict = cls._check_fields(config_dict)
         return cls(**config_dict)
     
     @classmethod
@@ -45,11 +75,13 @@ class ModelConfig:
         """Load configuration from JSON file."""
         with open(json_path, 'r') as f:
             config_dict = json.load(f)
+        config_dict = cls._check_fields(config_dict)
         return cls(**config_dict)
     
     @classmethod
     def from_dict(cls, config_dict: Dict[str, Any]) -> "ModelConfig":
         """Create configuration from dictionary."""
+        config_dict = cls._check_fields(config_dict)
         return cls(**config_dict)
     
     def to_yaml(self, yaml_path: str) -> None:
