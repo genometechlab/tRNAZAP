@@ -23,7 +23,7 @@ class InferenceResults:
         self.metadata = metadata
         self._results: Dict[str, ReadResult] = {}
     
-    def add_result(self, read_result: ReadResult) -> None:
+    def _add_result(self, read_result: ReadResult) -> None:
         """Add a ReadResult object.
         
         Args:
@@ -32,7 +32,7 @@ class InferenceResults:
         self._results[read_result.read_id] = read_result
         self.metadata.num_reads_processed = len(self._results)
     
-    def add(self, read_id: str, logits: Dict[str, np.ndarray], num_chunks: int) -> None:
+    def _add(self, read_id: str, logits: Dict[str, np.ndarray], num_chunks: int) -> None:
         """Add a result for a read.
         
         Args:
@@ -45,7 +45,7 @@ class InferenceResults:
             _logits=logits,
             num_chunks=num_chunks
         )
-        self.add_result(read_result)
+        self._add_result(read_result)
     
     def get(self, read_id: str) -> Optional[ReadResult]:
         """Get result for a specific read.
@@ -102,11 +102,6 @@ class InferenceResults:
     def read_ids(self) -> List[str]:
         """Get list of all read IDs."""
         return list(self._results.keys())
-    
-    @property
-    def chunk_size(self) -> int:
-        """Get chunk size from metadata."""
-        return self.metadata.chunk_size
     
     @property
     def label_names(self) -> dict:
