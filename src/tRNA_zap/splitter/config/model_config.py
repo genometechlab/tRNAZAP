@@ -56,7 +56,7 @@ class ModelConfig:
         if missing:
             raise ValueError(f"Missing required config fields: {', '.join(missing)}")
 
-        if len(invalid_keys)>=0:
+        if len(invalid_keys)>0:
             warnings.warn(f"Model config received the following invalid keys: {', '.join(invalid_keys)}")
 
         return valid_config
