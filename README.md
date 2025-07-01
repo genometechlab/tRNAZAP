@@ -32,8 +32,7 @@ Please download one of the specified models and its config file from the table a
 └── ...
 ```
 
-**Tip**: The path to the model weights file is specified inside the YAML configuration (`checkpoint_path`).
-If you want to move the weights to a different directory, be sure to update that path in the config file accordingly.
+> 💡 **Tip:** The path to the model weights file is specified inside the YAML configuration (`checkpoint_path`). If you want to move the weights to a different directory, be sure to update that path in the config file accordingly.
 
 
 ## Inference + Visualization Example
