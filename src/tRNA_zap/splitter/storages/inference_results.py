@@ -108,6 +108,14 @@ class InferenceResults:
         """Get chunk size from metadata."""
         return self.metadata.chunk_size
     
+    @property
+    def label_names(self) -> dict:
+        """return the label names"""
+        if self.metadata.label_names is not None:
+            return self.metadata.label_names
+        else:
+            raise ValueError("Label names are not provided in the config file")
+    
     def save(self, path: Union[str, Path]) -> None:
         """Save results to pickle file.
         
