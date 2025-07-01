@@ -16,6 +16,9 @@ class InferenceMetadata:
     model_type: str
     num_classes: int
     num_classes_seq2seq: int
+
+    # Label names
+    label_names: dict
     
     # Inference settings
     batch_size: int
