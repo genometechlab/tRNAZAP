@@ -118,7 +118,7 @@ class ResultsVisualizer:
         logits = read_result.seq2seq_logits
         probabilities = read_result.seq2seq_probs
         predictions = read_result.seq2seq_preds
-        chunk_size = self.results.chunk_size
+        chunk_size = self.results.metadata.chunk_size
 
         if logits is None:
             raise ValueError(f"No seq2seq logits found for read {read_id}")
