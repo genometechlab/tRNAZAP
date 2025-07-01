@@ -13,7 +13,7 @@ from ..feeders import Pod5IterDataset, SequenceStandardizer
 from ..config.model_config import ModelConfig, ModelLoader
 from ..storages import InferenceResults, InferenceMetadata, ReadResult
 
-warnings.filterwarnings("ignore", category=UserWarning)
+#warnings.filterwarnings("ignore", category=UserWarning)
 
 
 class Inference:
@@ -149,6 +149,9 @@ class Inference:
             model_type=self.config.model_type if hasattr(self.config, 'model_type') else 'transformer_zam',
             num_classes=self.config.num_classes,
             num_classes_seq2seq=getattr(self.config, 'num_classes_seq2seq', 4),
+
+            # Label names
+            label_names = self.config.label_names,
             
             # Inference settings
             batch_size=batch_size,
