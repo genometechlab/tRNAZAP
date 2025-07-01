@@ -5,7 +5,7 @@ from .config import ModelConfig, ModelLoader
 from .storages import InferenceResults, InferenceMetadata, ReadResult
 
 # Visualization
-from .visualize import visualize_from_results
+from .visualize import ResultsVisualizer
 
 # Export names
 __all__ = [

@@ -1,1 +1,1 @@
-from tRNA_zap.splitter import Inference, visualize_from_results
+from tRNA_zap.splitter import Inference, ResultsVisualizer

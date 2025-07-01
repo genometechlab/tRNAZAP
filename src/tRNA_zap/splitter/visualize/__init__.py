@@ -1,10 +1,10 @@
-from .visualize import visualize_from_results
+from .visualize import ResultsVisualizer
 
 # Optional: expose constants if users want to customize
 from .visualize import COLOR_MAP, CLASS_LABELS
 
 __all__ = [
-    'visualize_from_results',
+    'ResultsVisualizer',
     'COLOR_MAP',
     'CLASS_LABELS',
 ]
