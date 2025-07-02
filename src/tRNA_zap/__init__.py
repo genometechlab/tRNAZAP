@@ -1,1 +1,1 @@
-from tRNA_zap.splitter import Inference, ResultsVisualizer
+from tRNA_zap.splitter import Inference, ResultsVisualizer, TransformerZAM_multitask

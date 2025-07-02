@@ -9,7 +9,7 @@ from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import DataLoader
 import tqdm
 
-from ..feeders import Pod5IterDataset, SequenceStandardizer, collate_fn_fixed_padding
+from ..feeders import Pod5IterDataset, SequenceStandardizer, collate_fn
 from ..config.model_config import ModelConfig, ModelLoader
 from ..storages import InferenceResults, InferenceMetadata, ReadResult
 
@@ -149,7 +149,7 @@ class Inference:
             dataset,
             batch_size=1,
             num_workers=num_workers,
-            collate_fn=collate_fn_fixed_padding(max_seq_len=self.config.max_seq_len),
+            collate_fn=collate_fn,
             shuffle=False,
         )
         
