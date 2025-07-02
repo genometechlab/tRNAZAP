@@ -6,7 +6,8 @@ import torch.nn as nn
 
 
 def load_weights(model, path):
-    state_dict = torch.load(path)
+    device = next(model.parameters()).device
+    state_dict = torch.load(path, map_location=device)
     missing_keys, unexpected_keys = model.load_state_dict(state_dict, strict=False)
     if missing_keys:
         print("Missing keys:")
