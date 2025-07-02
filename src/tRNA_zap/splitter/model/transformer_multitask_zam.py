@@ -78,19 +78,23 @@ class TransformerZAM_multitask(nn.Module):
         cls_token = self.cls_token.expand(batch_size, 1, -1)
         embedded = torch.cat((cls_token, embedded), dim=1)  # [B, T+1, D]
 
-        # Add positional encodings (excluding CLS)
-        if self.encoding_type == "relative":
-            rel_bias = self.positional_encoding(seq_len)  # [T, T, D]
-            token_part = embedded[:, 1:] + rel_bias.sum(dim=1).unsqueeze(0).to(embedded.device)
-            embedded = torch.cat((embedded[:, :1], token_part), dim=1)
-        else:
-            abs_pe = self.positional_encoding(seq_len).to(embedded.device)  # [1, T, D]
-            embedded[:, 1:] = embedded[:, 1:] + abs_pe  # no PE for CLS
-
         # Build padding mask
         lengths_with_cls = length + 1
         padding_mask = torch.arange(seq_len_plus_cls, device=signal.device).expand(batch_size, -1) >= lengths_with_cls.unsqueeze(1)
 
+        # Add positional encodings (excluding CLS)
+        if self.encoding_type == "relative":
+            rel_bias = self.positional_encoding(seq_len)       # [T, T, D]
+            token_bias = rel_bias.sum(1)                       # [T, D]
+            token_bias = token_bias.unsqueeze(0).expand(batch_size, -1, -1)  # [B, T, D]
+            embedded[:, 1:] += token_bias * (~padding_mask[:, 1:]).unsqueeze(-1)
+        else:
+            abs_pe = self.positional_encoding(seq_len).to(embedded.device)  # [1, T, D]
+            embedded[:, 1:] += abs_pe * (~padding_mask[:, 1:]).unsqueeze(-1)
+            
+        # Optionally wipe padded slots completely
+        embedded[padding_mask] = 0.0
+    
         # Transformer encoder
         encoded = self.encoder(embedded, padding_mask)  # [B, T+1, D]
 
