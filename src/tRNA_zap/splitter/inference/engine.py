@@ -9,7 +9,7 @@ from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import DataLoader
 import tqdm
 
-from ..feeders import Pod5IterDataset, SequenceStandardizer
+from ..feeders import Pod5IterDataset, SequenceStandardizer, collate_fn_fixed_padding
 from ..config.model_config import ModelConfig, ModelLoader
 from ..storages import InferenceResults, InferenceMetadata, ReadResult
 
@@ -67,31 +67,6 @@ class Inference:
         standardizer = SequenceStandardizer()
         return standardizer.fit_transform([signal.reshape(-1, 1)])[0].flatten()
     
-    @staticmethod
-    def _collate_fn(batch):
-        """Collate function for DataLoader."""
-        assert len(batch) == 1
-        batch = batch[0]
-        
-        signals = [torch.tensor(item["inputs"]["signal"]) for item in batch]
-        lengths_list = [item["inputs"]["length"] for item in batch]
-        lengths_tensor = torch.tensor(lengths_list)
-        lengths_numpy = np.array(lengths_list)
-        read_ids = [item["metadata"]['read_id'] for item in batch]
-        
-        padded_signals = pad_sequence(signals, batch_first=True, padding_value=-1)
-        lengths_tensor = lengths_tensor.clip(1000)
-        
-        return {
-            "inputs": {
-                "signal": padded_signals,
-                "length": lengths_tensor,
-            },
-            "metadata": {
-                "read_id": read_ids,
-                "num_tokens": lengths_numpy,
-            }
-        }
     
     def _prepare_dataset(self, pod5_paths: Union[str, List[str]], read_ids: List[str], batch_size: int) -> Pod5IterDataset:
         """Prepare dataset for inference."""
@@ -174,7 +149,7 @@ class Inference:
             dataset,
             batch_size=1,
             num_workers=num_workers,
-            collate_fn=self._collate_fn,
+            collate_fn=collate_fn_fixed_padding(max_seq_len=self.config.max_seq_len),
             shuffle=False,
         )
         
