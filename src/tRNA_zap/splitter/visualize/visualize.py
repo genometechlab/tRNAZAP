@@ -223,6 +223,7 @@ class ResultsVisualizer:
 
         self._add_class_legend(ax)
         plt.tight_layout()
+        plt.close()
         return fig
 
     def _create_prediction_bar(self, ax, predictions, chunk_size, y_position, width=100):
