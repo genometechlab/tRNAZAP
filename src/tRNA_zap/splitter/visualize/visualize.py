@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 import pod5
 from matplotlib.patches import Rectangle
 from pathlib import Path
-from typing import Dict, Any, Optional, Tuple, Union, List
+from typing import Dict, Any, Optional, Tuple, Union, List, Generator
 from uuid import UUID
 
 try:
@@ -67,7 +67,7 @@ class ResultsVisualizer:
         color_map: Dict[int, str] = COLOR_MAP,
         class_labels: Dict[int, str] = CLASS_LABELS,
         pod5_paths: Optional[Union[str, Path, List[Union[str, Path]]]] = None
-    ):
+    ) -> None:
         self.results = results
         self.signal_scale = signal_scale
         self.color_map = color_map
@@ -103,17 +103,16 @@ class ResultsVisualizer:
                     "Please provide updated pod5_paths manually (e.g., if the files were moved or renamed)."
                 )
 
-    def visualize(
+    def _visualize(
         self,
         read_id: str,
+        signal: np.ndarray,
         apply_crf_smoothing: bool = True,
         plot_probabilities: bool = True,
         plot_signal: bool = True,
         figure_size: Tuple[int, int] = (16, 8),
     ) -> plt.Figure:
-        if read_id not in self.results:
-            raise ValueError(f"Read ID {read_id} not found in results")
-
+        
         read_result = self.results[read_id]
         logits = read_result.seq2seq_logits
         probabilities = read_result.seq2seq_probs
@@ -123,7 +122,6 @@ class ResultsVisualizer:
         if logits is None:
             raise ValueError(f"No seq2seq logits found for read {read_id}")
 
-        signal = self._load_signal(read_id)
         signal_scaled = self._prepare_signal(signal)
 
         predictions_smooth = None
@@ -146,22 +144,54 @@ class ResultsVisualizer:
         )
 
         return fig
+    
+    def visualize(        
+        self,
+        read_ids: Union[List[str], str],
+        apply_crf_smoothing: bool = True,
+        plot_probabilities: bool = True,
+        plot_signal: bool = True,
+        figure_size: Tuple[int, int] = (16, 8),
+    ) -> Union[plt.Figure, List[plt.Figure]]:
+        
+        return_single_fig = False
+        if isinstance(read_ids, str):
+            return_single_fig = True
+            read_ids = [read_ids,]
 
-    def _load_signal(self, read_id: str) -> np.ndarray:
+        if not all(read_id in self.results for read_id in read_ids):
+            missing = [read_id for read_id in read_ids if read_id not in self.results]
+            raise ValueError(f"Read ID(s) {', '.join(missing)} not found in results")
+        
+        figs = []
+        signals = self._load_signals(read_ids)
+        for read_id in read_ids:
+            fig_ = self._visualize(read_id,
+                                   signals[read_id],
+                                   apply_crf_smoothing,
+                                   plot_probabilities,
+                                   plot_signal,
+                                   figure_size)
+            figs.append(fig_)
+            
+        return figs[0] if return_single_fig else figs 
+        
+    def _load_signals(self, read_ids: List[str]) -> Dict:
         if not hasattr(self, "_reader") or self._reader is None:
             self._reader = pod5.DatasetReader(self._pod5_paths, recursive=True, max_cached_readers=8)
 
-            try:
-                read_record = next(self._reader.reads(selection=[UUID(read_id)]))
-                signal = read_record.signal
-                if signal is None:
-                    raise ValueError(f"Signal for read ID {read_id} is empty or missing.")
-                return signal
-            except StopIteration:
-                raise ValueError(f"Read ID {read_id} not found in the provided POD5 files.")
-            except Exception as e:
-                raise RuntimeError(f"Failed to load signal for read ID {read_id}: {e}")
-        return read_record.signal
+        try:
+            out_dict = {}
+            selection = [UUID(read_id) for read_id in read_ids]
+            for read_record in self._reader.reads(selection=selection):
+                fetched_signal = read_record.signal
+                fetched_read_id = str(read_record.read_id)
+                if fetched_signal is None:
+                    raise ValueError(f"Signal for read ID {fetched_read_id} is empty or missing.")
+                out_dict[fetched_read_id] = fetched_signal
+            return out_dict
+        except Exception as e:
+            raise RuntimeError(f"Failed to load signal for the provided read_ids")
 
     def _prepare_signal(self, signal: np.ndarray) -> np.ndarray:
         signal = signal.astype(np.float32).reshape(-1, 1)
@@ -261,6 +291,13 @@ class ResultsVisualizer:
     def close(self):
         """Close the internal POD5 reader if it is open."""
         if hasattr(self, "_reader") and self._reader is not None:
-            self._reader.close()
+            self._reader.clear_index()
+            self._reader.clear_readers()
             self._reader = None
 
+    
+    def __enter__(self) -> "ResultsVisualizer":
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        self.close()
