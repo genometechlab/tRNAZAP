@@ -229,3 +229,9 @@ class Inference:
             "device": str(self.device),
             "dtype": self.config.float_dtype,
         }
+    
+    def __enter__(self) -> "Inference":
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        pass
