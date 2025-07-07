@@ -45,3 +45,6 @@ Thumbs.db
 *.fasta
 *.fa
 *.pth
+
+# Experimental folders
+**ecoli_bio**
