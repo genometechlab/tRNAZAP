@@ -8,6 +8,9 @@ import torch.nn.functional as F
 from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import DataLoader
 import tqdm
+import pod5
+
+from uuid import UUID
 
 from ..feeders import Pod5IterDataset, SequenceStandardizer, collate_fn
 from ..config.model_config import ModelConfig, ModelLoader
@@ -84,12 +87,11 @@ class Inference:
         dataset = Pod5IterDataset(
             read_ids=read_ids,
             pod5_paths=pod5_paths,
-            random_crop=False,
-            load_labels=False,
             **dataset_params,
         )
         
         return dataset
+
     
     def predict(
         self,
@@ -101,7 +103,7 @@ class Inference:
         show_progress: bool = True,
     ) -> InferenceResults:
         """
-        Run inference on Pod5 files.
+        Run inference on specific read-ids in a Pod5 files.
         
         Args:
             pod5_paths: Path(s) to Pod5 files or directories
@@ -199,27 +201,6 @@ class Inference:
         print(f"Done! Processed {len(results)} reads in {results.metadata.total_inference_time:.2f}s")
         return results
     
-    def predict_from_file(
-        self,
-        pod5_paths: Union[str, List[str]],
-        read_ids_file: str,
-        **kwargs
-    ) -> InferenceResults:
-        """
-        Run inference using read IDs from a file.
-        
-        Args:
-            pod5_paths: Path(s) to Pod5 files or directories
-            read_ids_file: Path to file containing read IDs (one per line)
-            **kwargs: Additional arguments passed to predict()
-            
-        Returns:
-            InferenceResults object
-        """
-        with open(read_ids_file, 'r') as f:
-            read_ids = [line.strip() for line in f.readlines()]
-            
-        return self.predict(pod5_paths, read_ids, **kwargs)
     
     def get_model_info(self) -> Dict[str, Any]:
         """Get information about the loaded model."""
