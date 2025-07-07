@@ -7,6 +7,7 @@ import yaml
 import json
 import warnings
 
+from pathlib import Path
 from ..model import TransformerZAM_multitask
 from ..utils import load_weights
 
@@ -61,12 +62,30 @@ class ModelConfig:
 
         return valid_config
     
+    @staticmethod
+    def _resolve_paths(config: dict, base_dir: Path) -> dict:
+        resolved = {}
+        for k, v in config.items():
+            if isinstance(v, str) and (k.endswith("_path") or k.endswith("_dir")):
+                path = Path(v)
+                if not path.is_absolute():
+                    resolved[k] = str((base_dir/path).resolve())
+                else:
+                    resolved[k] = v
+            else:
+                resolved[k] = v  
+        return resolved  
 
     @classmethod
     def from_yaml(cls, yaml_path: str) -> "ModelConfig":
         """Load configuration from YAML file."""
         with open(yaml_path, 'r') as f:
             config_dict = yaml.safe_load(f)
+
+        yaml_path = Path(yaml_path).resolve()
+        base_dir = yaml_path.parent
+
+        config_dict = cls._resolve_paths(config_dict, base_dir)
         config_dict = cls._check_fields(config_dict)
         return cls(**config_dict)
     
@@ -75,6 +94,11 @@ class ModelConfig:
         """Load configuration from JSON file."""
         with open(json_path, 'r') as f:
             config_dict = json.load(f)
+
+        json_path = Path(json_path).resolve()
+        base_dir = json_path.parent
+
+        config_dict = cls._resolve_paths(config_dict, base_dir)
         config_dict = cls._check_fields(config_dict)
         return cls(**config_dict)
     
