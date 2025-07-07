@@ -3,7 +3,7 @@ import numpy as np
 import pod5
 import torch
 from uuid import UUID
-from .pod5_utils import load_signal, load_signal_with_tokens
+from ..signal_utils import load_signal
 
 
 class Pod5IterDataset(data.Dataset):
@@ -20,13 +20,7 @@ class Pod5IterDataset(data.Dataset):
         step_size: int,
         max_seq_len: int = None,
         batch_size: int = 512,
-        load_labels: bool = True,
-        token_rles: list = None,
-        labels: list = None,
-        rle_decoder: callable = None,
-        rle_decoder_args: dict = None,
         transform: callable = None,
-        random_crop: bool = False,
         dtype: str = "float32",
         debug: bool = False,
     ):
@@ -45,7 +39,6 @@ class Pod5IterDataset(data.Dataset):
             rle_decoder (callable, optional): Function to decode RLE tokens, required if load_labels is True.
             rle_decoder_args (dict, optional): Arguments for the RLE decoder, required if load_labels is True.
             transform (callable, optional): Transformation function for signals.
-            random_crop (bool, optional): Whether to apply random cropping. Defaults to False.
             dtype (str, optional): Data type of the signal ('single' or 'double'). Defaults to 'single'.
             debug (bool, optional): If True, enables debug mode with error logging. Defaults to False.
         """
@@ -67,29 +60,6 @@ class Pod5IterDataset(data.Dataset):
         self.max_seq_len = max_seq_len
         self.batch_size = batch_size
         self.transform = transform
-        self.random_crop = random_crop
-        self.debug = debug
-        self.load_labels = load_labels
-
-        # Handle labels and RLE data if required
-        if self.load_labels:
-            if labels is None or token_rles is None or rle_decoder is None:
-                raise ValueError(
-                    "If load_labels is True, labels, token_rles, and rle_decoder must be provided."
-                )
-            if len(labels) != len(read_ids) or len(labels) != len(token_rles):
-                raise ValueError(
-                    "Inconsistent number of labels, reads and tokens are provided"
-                )
-            self.token_rles = {rid: trle for rid, trle in zip(read_ids, token_rles)}
-            self.labels = {rid: label for rid, label in zip(read_ids, labels)}
-            self.rle_decoder = rle_decoder
-            self.rle_decoder_args = rle_decoder_args or {}
-        else:
-            self.token_rles = None
-            self.labels = None
-            self.rle_decoder = None
-            self.rle_decoder_args = None
 
         # Initialize batches
         self._init_batches()
@@ -120,13 +90,6 @@ class Pod5IterDataset(data.Dataset):
             for i in range(0, len(self.read_ids), self.batch_size)
         ]
 
-    def shuffle_samples(self, random_seed):
-        """
-        Shuffles read_ids in place to randomize batch order.
-        """
-        generator = np.random.default_rng(seed=random_seed)
-        generator.shuffle(self.read_ids)
-
     def __getitem__(self, index: int):
         """
         Fetches a batch of samples based on the index.
@@ -149,49 +112,22 @@ class Pod5IterDataset(data.Dataset):
                 if self.transform:
                     signal = self.transform(signal).astype(self.signal_dtype)
 
-                if self.load_labels:
-                    label = self.labels[read_id]
-                    tokens_rle = self.token_rles[read_id]
-                    tokens = self.rle_decoder(tokens_rle, **self.rle_decoder_args)
-                    signal, tokens = load_signal_with_tokens(
-                        signal,
-                        tokens,
-                        self.window_size,
-                        self.step_size,
-                        self.max_seq_len,
-                        self.random_crop,
-                    )
-                    output = {
-                        "inputs": {
-                            "signal": signal,
-                            "length": signal.shape[0],
-                        },
-                        "labels": {
-                            "seq_class": label,
-                            "seq2seq": tokens,
-                        },
-                        "metadata": {
-                            "read_id": read_id,
-                            "num_tokens": signal.shape[0],
-                        },
-                    }
-                else:
-                    signal = load_signal(
-                        signal, 
-                        self.window_size, 
-                        self.step_size, 
-                        self.max_seq_len
-                    )
-                    output = {
-                        "inputs": {
-                            "signal": signal,
-                            "length": signal.shape[0],
-                        },
-                        "metadata": {
-                            "read_id": read_id,
-                            "num_tokens": signal.shape[0],
-                        },
-                    }
+                signal = load_signal(
+                    signal, 
+                    self.window_size, 
+                    self.step_size, 
+                    self.max_seq_len
+                )
+                output = {
+                    "inputs": {
+                        "signal": signal,
+                        "length": signal.shape[0],
+                    },
+                    "metadata": {
+                        "read_id": read_id,
+                        "num_tokens": signal.shape[0],
+                    },
+                }
 
                 batch_samples.append(output)
             except Exception as e:
