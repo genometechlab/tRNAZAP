@@ -75,6 +75,16 @@ class ReadResult:
         return None
     
     @property
+    def variable_region_range(self):
+        """return the first and last tokens predicted as variale region"""
+        preds = np.array(self.seq2seq_preds)
+        zero_indices = np.where(preds == 0)[0]
+        if zero_indices.size > 0:
+            return (zero_indices[0].item(), zero_indices[-1].item())
+        else:
+            return (-1, -1)
+    
+    @property
     def classification_pred(self) -> Optional[int]:
         """Get classification prediction as an integer."""
         if self.classification_probs is not None:

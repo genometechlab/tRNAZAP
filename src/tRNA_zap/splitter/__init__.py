@@ -1,4 +1,4 @@
-from .inference import Inference
+from .inference import Inference, StreamInference
 from .config import ModelConfig, ModelLoader
 from .model import TransformerZAM_multitask
 
@@ -12,6 +12,7 @@ from .visualize import ResultsVisualizer
 __all__ = [
     # Core
     'Inference',
+    'StreamInference',
     'ModelConfig', 
     'ModelLoader',
     
