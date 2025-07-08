@@ -9,11 +9,6 @@ from pathlib import Path
 from typing import Dict, Any, Optional, Tuple, Union, List, Generator
 from uuid import UUID
 
-try:
-    from torchcrf import CRF
-except ImportError:
-    CRF = None
-
 from ..feeders import SequenceScaler
 from ..storages import InferenceResults
 
@@ -125,9 +120,12 @@ class ResultsVisualizer:
         signal_scaled = self._prepare_signal(signal)
 
         predictions_smooth = None
-        if apply_crf_smoothing and CRF is not None:
+        if apply_crf_smoothing:
             try:
-                predictions_smooth = self._apply_crf_smoothing(logits)
+                from ..utils import crf_smoothing
+                predictions_smooth = crf_smoothing(logits, device=self.device)
+            except ImportError as e:
+                print(f"[WARNING] Failed to import crf_smoothing: {e}")
             except Exception as e:
                 print(f"[WARNING] CRF smoothing failed: {e}")
 
@@ -197,21 +195,6 @@ class ResultsVisualizer:
         signal = signal.astype(np.float32).reshape(-1, 1)
         scaler = SequenceScaler(scale=self.signal_scale, offset=0)
         return scaler.fit_transform([signal])[0].reshape(-1)
-
-    def _apply_crf_smoothing(self, logits: np.ndarray) -> np.ndarray:
-        crf = CRF(4, batch_first=True)
-        crf.transitions = torch.nn.Parameter(torch.tensor([
-            [0, -1e8, -1e8, 0],
-            [-1e8, 0, 0, -1e8],
-            [0, -1e8, 0, -1e8],
-            [-1e8, -1e8, -1e8, 0],
-        ]))
-        crf.to(self.device)
-        with torch.no_grad():
-            logits_tensor = torch.tensor(logits).unsqueeze(0).to(self.device)
-            mask = torch.ones(logits_tensor.shape[:2], dtype=torch.bool).to(self.device)
-            decoded = crf.decode(logits_tensor, mask)
-        return np.array(decoded[0])
 
     def _create_figure(
         self,
