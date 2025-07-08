@@ -2,7 +2,7 @@ import os
 import glob
 import torch
 from dataclasses import dataclass, field, fields, MISSING
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Union
 import yaml
 import json
 import warnings
@@ -11,6 +11,8 @@ from pathlib import Path
 from ..model import TransformerZAM_multitask
 from ..utils import load_weights
 
+
+PathLike = Union[str, Path]
 
 @dataclass
 class ModelConfig:
@@ -69,56 +71,54 @@ class ModelConfig:
             if isinstance(v, str) and (k.endswith("_path") or k.endswith("_dir")):
                 path = Path(v)
                 if not path.is_absolute():
-                    resolved[k] = str((base_dir/path).resolve())
+                    resolved[k] = str((base_dir / path).resolve()) 
                 else:
-                    resolved[k] = v
+                    resolved[k] = str(path)
             else:
-                resolved[k] = v  
-        return resolved  
+                resolved[k] = v
+        return resolved
 
     @classmethod
-    def from_yaml(cls, yaml_path: str) -> "ModelConfig":
+    def from_yaml(cls, yaml_path: PathLike) -> "ModelConfig":
         """Load configuration from YAML file."""
+        yaml_path = Path(yaml_path).resolve()
         with open(yaml_path, 'r') as f:
             config_dict = yaml.safe_load(f)
 
-        yaml_path = Path(yaml_path).resolve()
         base_dir = yaml_path.parent
-
         config_dict = cls._resolve_paths(config_dict, base_dir)
         config_dict = cls._check_fields(config_dict)
         return cls(**config_dict)
     
     @classmethod
-    def from_json(cls, json_path: str) -> "ModelConfig":
+    def from_json(cls, json_path: PathLike) -> "ModelConfig":
         """Load configuration from JSON file."""
+        json_path = Path(json_path).resolve()
         with open(json_path, 'r') as f:
             config_dict = json.load(f)
 
-        json_path = Path(json_path).resolve()
         base_dir = json_path.parent
-
         config_dict = cls._resolve_paths(config_dict, base_dir)
         config_dict = cls._check_fields(config_dict)
         return cls(**config_dict)
     
     @classmethod
-    def from_dict(cls, config_dict: Dict[str, Any]) -> "ModelConfig":
+    def from_dict(cls, config_dict: Dict[PathLike, Any]) -> "ModelConfig":
         """Create configuration from dictionary."""
         config_dict = cls._check_fields(config_dict)
         return cls(**config_dict)
     
-    def to_yaml(self, yaml_path: str) -> None:
+    def to_yaml(self, yaml_path: PathLike) -> None:
         """Save configuration to YAML file."""
-        config_dict = self.__dict__
+        yaml_path = Path(yaml_path)
         with open(yaml_path, 'w') as f:
-            yaml.dump(config_dict, f, default_flow_style=False)
+            yaml.dump(self.__dict__, f, default_flow_style=False)
     
-    def to_json(self, json_path: str) -> None:
+    def to_json(self, json_path: PathLike) -> None:
         """Save configuration to JSON file."""
-        config_dict = self.__dict__
+        json_path = Path(json_path)
         with open(json_path, 'w') as f:
-            json.dump(config_dict, f, indent=2)
+            json.dump(self.__dict__, f, indent=2)
 
 
 class ModelLoader:
