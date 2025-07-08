@@ -21,6 +21,9 @@ from ..storages import InferenceResults, InferenceMetadata
 
 logger = logging.getLogger(__name__)
 
+PathLike = Union[str, Path]
+PathLikeList = Union[PathLike, List[PathLike]]
+
 
 class StreamInference:
     """
@@ -64,9 +67,9 @@ class StreamInference:
         show_progress : show tqdm progress bars
         """
         start = time.time()
-        pod5_path = Path(pod5_paths)
+        pod5_paths = self._normalize_to_path_list(pod5_paths)
 
-        metadata = self._build_metadata(pod5_path, batch_size)
+        metadata = self._build_metadata(pod5_paths, batch_size)
         results = InferenceResults(metadata=metadata)
 
         # queue holds *individual* pre-processed read dicts
@@ -175,7 +178,7 @@ class StreamInference:
         batch_t = collate_fn([batch,])
 
         inputs = {k: v.to(self.device) for k, v in batch_t["inputs"].items()}
-        use_amp = self.config.float_dtype == "float16" and self.device == "cuda"
+        use_amp = self.config.float_dtype == "float16" and self.device != "cpu"
 
         with torch.no_grad(), torch.amp.autocast(
             device_type=self.device, enabled=use_amp
@@ -229,6 +232,15 @@ class StreamInference:
         if isinstance(cfg, dict):
             return ModelConfig.from_dict(cfg)
         raise TypeError("config must be ModelConfig | str | dict")
+    
+    def _normalize_to_path_list(self, paths: PathLikeList) -> List[Path]:
+        if isinstance(paths, (str, Path)):
+            return [Path(paths)]
+        elif isinstance(paths, list):
+            return [Path(p) for p in paths]
+        else:
+            raise TypeError(f"Expected str, Path, or list of them, got {type(paths).__name__}")
+
 
     def _build_metadata(self, pod5_path: Path, batch_size: int) -> InferenceMetadata:
         return InferenceMetadata(
@@ -242,7 +254,7 @@ class StreamInference:
             device=str(self.device),
             float_dtype=self.config.float_dtype,
             model_checkpoint=str(getattr(self.config, "checkpoint_path", None)),
-            pod5_paths=[str(pod5_path)],
+            pod5_paths=pod5_path,
         )
 
     # ---------- context manager --------------------------------------------

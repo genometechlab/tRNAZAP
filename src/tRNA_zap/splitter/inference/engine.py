@@ -10,6 +10,7 @@ from torch.utils.data import DataLoader
 import tqdm
 import pod5
 
+from pathlib import Path
 from uuid import UUID
 
 from ..feeders import Pod5IterDataset, SequenceStandardizer, collate_fn
@@ -18,6 +19,8 @@ from ..storages import InferenceResults, InferenceMetadata, ReadResult
 
 #warnings.filterwarnings("ignore", category=UserWarning)
 
+PathLike = Union[str, Path]
+PathLikeList = Union[PathLike, List[PathLike]]
 
 class Inference:
     """Main inference engine for running predictions on Pod5 files."""
@@ -51,6 +54,8 @@ class Inference:
         
         # Set device
         self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        if isinstance(self.device, str):
+            self.device = torch.device(self.device)
         
         # Initialize model loader
         self.model_loader = ModelLoader(self.config, self.device)
@@ -117,6 +122,7 @@ class Inference:
             InferenceResults object containing all results and metadata
         """
         start_time = time.time()
+        pod5_paths = self._normalize_to_path_list(pod5_paths)
         
         # Create metadata
         metadata = InferenceMetadata(
@@ -137,7 +143,7 @@ class Inference:
             
             # Run information
             model_checkpoint=str(self.config.checkpoint_path) if self.config.checkpoint_path else None,
-            pod5_paths=[str(p) for p in (pod5_paths if isinstance(pod5_paths, list) else [pod5_paths])],
+            pod5_paths=pod5_paths,
         )
         
         # Create results container
@@ -157,7 +163,7 @@ class Inference:
         
         # Run inference
         print(f"Running inference on {len(read_ids)} reads...")
-        use_amp = self.config.float_dtype == "float16" and self.device!="cpu"
+        use_amp = self.config.float_dtype == "float16" and self.device.type =="cuda"
         
         with torch.no_grad():
             iterator = tqdm.tqdm(dataloader, desc="Processing") if show_progress else dataloader
@@ -170,7 +176,7 @@ class Inference:
                 }
                 
                 # Run model
-                with torch.amp.autocast(device_type=self.device, enabled=use_amp):
+                with torch.amp.autocast(device_type=self.device.type, enabled=use_amp):
                     outputs = self.model(**inputs)
                 
                 # Process each read in the batch
@@ -210,6 +216,14 @@ class Inference:
             "device": str(self.device),
             "dtype": self.config.float_dtype,
         }
+    
+    def _normalize_to_path_list(self, paths: PathLikeList) -> List[Path]:
+        if isinstance(paths, (str, Path)):
+            return [Path(paths)]
+        elif isinstance(paths, list):
+            return [Path(p) for p in paths]
+        else:
+            raise TypeError(f"Expected str, Path, or list of them, got {type(paths).__name__}")
     
     def __enter__(self) -> "Inference":
         return self
