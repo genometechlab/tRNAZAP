@@ -1,6 +1,8 @@
 """
 ReadResult class for storing individual read inference results.
 """
+import torch
+from typing import Union
 from dataclasses import dataclass
 from typing import Dict, Optional
 import numpy as np
@@ -71,18 +73,31 @@ class ReadResult:
     def seq2seq_preds(self) -> Optional[list]:
         """Get seq2seq predictions as a list."""
         if self.seq2seq_probs is not None:
-            return np.argmax(self.seq2seq_probs, axis=-1).tolist()
+            return np.argmax(self.seq2seq_probs, axis=-1)
         return None
+    
+    def get_smoothed_seq2seq_preds(self, 
+                                   device: Union[torch.device, str] = 'cpu', 
+                                   return_variable_region_range: bool = False) -> Optional[list]:
+        if self.seq2seq_probs is not None:
+            try:
+                from ..utils import crf_smoothing
+                predictions_smooth = crf_smoothing(self.seq2seq_logits, device=device)
+                if return_variable_region_range:
+                    range_ = self._locate_region_of_interest(predictions_smooth, 0)
+                    return predictions_smooth, range_
+                else:
+                    return predictions_smooth
+            except ImportError as e:
+                print(f"[WARNING] Failed to import crf_smoothing: {e}")
+            except Exception as e:
+                print(f"[WARNING] CRF smoothing failed: {e}")
     
     @property
     def variable_region_range(self):
         """return the first and last tokens predicted as variale region"""
-        preds = np.array(self.seq2seq_preds)
-        zero_indices = np.where(preds == 0)[0]
-        if zero_indices.size > 0:
-            return (zero_indices[0].item(), zero_indices[-1].item())
-        else:
-            return (-1, -1)
+        preds = self.seq2seq_preds
+        return self._locate_region_of_interest(preds, 0)
     
     @property
     def classification_pred(self) -> Optional[int]:
@@ -90,6 +105,14 @@ class ReadResult:
         if self.classification_probs is not None:
             return int(np.argmax(self.classification_probs))
         return None
+    
+    @staticmethod
+    def _locate_region_of_interest(preds, region_id):
+        indices = np.where(preds == region_id)[0]
+        if indices.size > 0:
+            return (indices[0].item(), indices[-1].item())
+        else:
+            return (-1, -1)
     
     def __repr__(self) -> str:
         logit_shapes = {k: v.shape for k, v in self._logits.items()}
