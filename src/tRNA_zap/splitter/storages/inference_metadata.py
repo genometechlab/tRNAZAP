@@ -4,6 +4,7 @@ Metadata class for storing inference configuration and settings.
 from dataclasses import dataclass, field
 from typing import Optional, List
 from datetime import datetime
+from pathlib import Path
 
 
 @dataclass
@@ -28,7 +29,7 @@ class InferenceMetadata:
     # Run information
     timestamp: str = field(default_factory=lambda: datetime.now().isoformat())
     model_checkpoint: Optional[str] = None
-    pod5_paths: Optional[List[str]] = None
+    pod5_paths: Optional[List[Path]] = None
     num_reads_processed: int = 0
     total_inference_time: Optional[float] = None
     
