@@ -2,6 +2,15 @@
 # tRNA_zap
 tRNA ionic current model and alignment tools
 
+## Table of Contents
+
+- [Installation](#installation)
+- [Splitter Module](#splitter-module)
+  - [Available models](#available-models)
+  - [Inference](#inference)
+    - [InferenceResults](#inferenceresults)
+    - [Readresult](#readresult)
+  - [Visualization](#visualization)
 # Installation
 
 To install the repository, refer to the following instructions:
@@ -43,7 +52,13 @@ Please download one of the specified models and its config file from the table a
 
 > 💡 **Tip:** The path to the model weights file is specified inside the YAML configuration (`checkpoint_path`). If you want to move the weights to a different directory, be sure to update that path in the config file accordingly.
 
-## Inference run example
+## Inference
+
+The inference module will ran the model on each of the read_ids     
+It will classify the read, as part of the classification task,   
+and will segment the read into variable region, ONT adapter, 3' and 5' splint regions
+
+#### Inference run example
 
 ```python
 # From the splitter module, import Inference and ResultsVisualizer classes
@@ -76,7 +91,7 @@ You will get an `InferenceResults` object as the return value of `Inference.pred
 An explanation on how to use and interact with this isntance is provided below
 
 
-## `InferenceResults`
+### `InferenceResults`
 
 The `InferenceResults` object is a lightweight container that stores all outputs from an inference run, indexed by read ID. It also includes relevant metadata and supports basic persistence and inspection.
 
@@ -138,7 +153,7 @@ results = infer_engine.predict(...)
     summary = results.label_names
     ```
 
-## ReadResult
+### ReadResult
 
 Each value corresponding to a read_id key in InferenceResults is a ReadResult object. It stores the model outputs for a single read. Probabilities and predictions for both sequence-level and read-level tasks can be accessed directly from this object.
 
@@ -232,3 +247,32 @@ read_result = inference_results["read_id"]
         # or with variable region range:
         smoothed_preds, (start, end) = read_result.get_smoothed_seq2seq_preds(return_variable_region_range=True)
     ```
+---
+
+## Visualization
+
+The visualization module allows to visualize the results of inference.
+You will be able to plot a signal and each segment to get a sense of the model's performance.
+
+#### Visualization run example
+
+```python
+from trnazap.splitter import ResultsVisualizer
+
+
+# Initialize an instance of 'ResultsVisualizer'
+# using an isntance of 'InferenceResults'
+
+with ResultsVisualizer(results2) as res_vis:
+    # Use the visualize method to visualize the inference results
+    # naturally, your requested readID should be in the inference results
+    # Note that you can either pass a single read_id to this method, or a list of read_ids
+    # a single matplotlib figure of a list of figures will be returned based on the input
+    fig_ = res_vis.visualize('readID_123')
+
+# OR
+
+res_vis = ResultsVisualizer(results2)
+fig_ = res_vis.visualize('readID_123')
+fig_.close()
+```
