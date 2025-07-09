@@ -29,6 +29,8 @@ class InferenceResults:
         Args:
             read_result: ReadResult object to add
         """
+        if read_result._back_reference is None:
+            read_result._back_reference = self
         self._results[read_result.read_id] = read_result
         self.metadata.num_reads_processed = len(self._results)
     
@@ -43,7 +45,8 @@ class InferenceResults:
         read_result = ReadResult(
             read_id=read_id,
             _logits=logits,
-            num_chunks=num_chunks
+            num_chunks=num_chunks,
+            _back_reference = self
         )
         self._add_result(read_result)
     
