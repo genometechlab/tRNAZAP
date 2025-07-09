@@ -33,7 +33,8 @@ To use the module, 1) download a model and its configuration from the available 
 
 | Model Name           | Config File                             | Model Weights                          | Description                                 |
 |----------------------|------------------------------------------|----------------------------------------|---------------------------------------------|
-| `zap_s54_c127`       | [`zap_s54_c127.yaml`](./configs/zap_s54_c127.yaml) | [`zap_s54_c127.pth`](./checkpoints/zap_s54_c127.pth) | Standard classifier trained on yeast and ecoli
+| `zap_s54_c127`       | [`zap_s54_c127.yaml`](./configs/zap_s54_c127.yaml) | [`zap_s54_c127.pth`](https://drive.google.com/file/d/1yyARBD3sCos3VFiau0HcJh0fHVNt2vz3/view?usp=drive_link) | Standard classifier trained on yeast and ecoli
+| `zap_s54_c49_IVTecoli`       | [`zap_s54_c49_IVTecoli.yaml`](./configs/zap_s54_c49_IVTecoli.yaml) | [`zap_s54_c49_IVTecoli.pth`](https://drive.google.com/file/d/1ieS6WQlp-eIdsbWARbZ0RVFdR_QO0KRF/view?usp=drive_link) | Standard classifier trained on ecoli only
 
 ---
 
