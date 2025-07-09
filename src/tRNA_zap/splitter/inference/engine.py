@@ -1,221 +1,238 @@
-import os
-import warnings
-import time
-from typing import List, Dict, Any, Optional, Union
-import numpy as np
-import torch
-import torch.nn.functional as F
-from torch.nn.utils.rnn import pad_sequence
-from torch.utils.data import DataLoader
-import tqdm
-import pod5
+# stream_inference.py
+from __future__ import annotations
 
+import logging
+import queue
+import threading
+import time
 from pathlib import Path
+from typing import Dict, List, Optional, Union
 from uuid import UUID
 
-from ..feeders import Pod5IterDataset, SequenceStandardizer, collate_fn
-from ..config.model_config import ModelConfig, ModelLoader
-from ..storages import InferenceResults, InferenceMetadata, ReadResult
+import numpy as np
+import pod5
+import torch
+import tqdm
 
-#warnings.filterwarnings("ignore", category=UserWarning)
+from ..config.model_config import ModelConfig, ModelLoader
+from ..feeders import SequenceStandardizer, load_signal, collate_fn
+from ..storages import InferenceResults, InferenceMetadata
+
+
+logger = logging.getLogger(__name__)
 
 PathLike = Union[str, Path]
 PathLikeList = Union[PathLike, List[PathLike]]
 
+
 class Inference:
-    """Main inference engine for running predictions on Pod5 files."""
-    
+    """
+    Stream reads from POD5, preprocess on CPU, batch on-the-fly,
+    and run inference on GPU – all in a producer/consumer pipeline.
+    """
+
+    # ---------- construction -------------------------------------------------
     def __init__(
         self,
-        config: Union[ModelConfig, str, Dict[str, Any]],
+        config: Union[ModelConfig, str, Dict],
         device: Optional[torch.device] = None,
-    ):
-        """
-        Initialize InferenceEngine.
-        
-        Args:
-            config: ModelConfig instance, path to config file, or config dictionary
-            device: torch device to run inference on
-        """
-        # Load configuration
-        if isinstance(config, str):
-            if config.endswith('.yaml'):
-                self.config = ModelConfig.from_yaml(config)
-            elif config.endswith('.json'):
-                self.config = ModelConfig.from_json(config)
-            else:
-                raise ValueError(f"Unsupported config file format: {config}")
-        elif isinstance(config, dict):
-            self.config = ModelConfig.from_dict(config)
-        elif isinstance(config, ModelConfig):
-            self.config = config
-        else:
-            raise TypeError("config must be ModelConfig, path to config file, or dict")
-        
-        # Set device
-        self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        if isinstance(self.device, str):
-            self.device = torch.device(self.device)
-        
-        # Initialize model loader
-        self.model_loader = ModelLoader(self.config, self.device)
-        self.model = None
-        
-        # Initialize model
-        self._initialize_model()
-        
-    def _initialize_model(self):
-        """Initialize and load model."""
-        self.model = self.model_loader.get_model(load_checkpoint=True)
-        self.model.eval()
-        
-    @staticmethod
-    def _local_standardizer(signal):
-        """Standardize the input signal."""
-        standardizer = SequenceStandardizer()
-        return standardizer.fit_transform([signal.reshape(-1, 1)])[0].flatten()
-    
-    
-    def _prepare_dataset(self, pod5_paths: Union[str, List[str]], read_ids: List[str], batch_size: int) -> Pod5IterDataset:
-        """Prepare dataset for inference."""
-        dtype = "float64" if self.config.float_dtype == "float64" else "float32"
-        
-        dataset_params = {
-            "batch_size": batch_size,
-            "window_size": self.config.chunk_size,
-            "step_size": self.config.chunk_size,
-            "max_seq_len": self.config.max_seq_len,
-            "transform": self._local_standardizer,
-            "dtype": dtype,
-        }
-        
-        dataset = Pod5IterDataset(
-            read_ids=read_ids,
-            pod5_paths=pod5_paths,
-            **dataset_params,
+    ) -> None:
+        self.config: ModelConfig = self._load_config(config)
+        self.device: torch.device = (
+            device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
         )
-        
-        return dataset
 
-    
+        self.queue_size_mult = 4
+        
+        self.model_loader = ModelLoader(self.config, self.device)
+        self.model = self.model_loader.get_model(load_checkpoint=True).eval()
+
+    # ---------- public API ---------------------------------------------------
     def predict(
         self,
-        pod5_paths: Union[str, List[str]],
-        read_ids: List[str],
+        pod5_paths: Union[str, Path],
+        read_ids: Optional[List[str]] = None,
         batch_size: int = 32,
-        num_workers: int = 4,
-        save_path: Optional[str] = None,
+        save_path: Optional[Union[str, Path]] = None,
         show_progress: bool = True,
     ) -> InferenceResults:
         """
-        Run inference on specific read-ids in a Pod5 files.
-        
-        Args:
-            pod5_paths: Path(s) to Pod5 files or directories
-            read_ids: List of read IDs to process
-            batch_size: Batch size for processing
-            num_workers: Number of workers for data loading
-            save_path: Path to save results (optional)
-            show_progress: Whether to show progress bar
-            
-        Returns:
-            InferenceResults object containing all results and metadata
+        Stream-infer over one POD5 file.
+
+        Args
+        ----
+        pod5_paths   : path to a POD5 file (recursive dirs can be handled outside)
+        read_ids    : list of read-ids to restrict to; None ➜ all reads
+        batch_size  : how many reads per GPU batch
+        save_path   : optional .npz /.json path for results
+        show_progress : show tqdm progress bars
         """
-        start_time = time.time()
+        start = time.time()
         pod5_paths = self._normalize_to_path_list(pod5_paths)
-        
-        # Create metadata
-        metadata = InferenceMetadata(
-            # Model configuration
-            chunk_size=self.config.chunk_size,
-            max_seq_len=self.config.max_seq_len,
-            model_type=self.config.model_type if hasattr(self.config, 'model_type') else 'transformer_zam',
-            num_classes=self.config.num_classes,
-            num_classes_seq2seq=getattr(self.config, 'num_classes_seq2seq', 4),
 
-            # Label names
-            label_names = self.config.label_names,
-            
-            # Inference settings
-            batch_size=batch_size,
-            device=str(self.device),
-            float_dtype=self.config.float_dtype,
-            
-            # Run information
-            model_checkpoint=str(self.config.checkpoint_path) if self.config.checkpoint_path else None,
-            pod5_paths=pod5_paths,
-        )
-        
-        # Create results container
+        metadata = self._build_metadata(pod5_paths, batch_size)
         results = InferenceResults(metadata=metadata)
-        
-        # Prepare dataset
-        dataset = self._prepare_dataset(pod5_paths, read_ids, batch_size)
-        
-        # Create data loader
-        dataloader = DataLoader(
-            dataset,
-            batch_size=1,
-            num_workers=num_workers,
-            collate_fn=collate_fn,
-            shuffle=False,
-        )
-        
-        # Run inference
-        print(f"Running inference on {len(read_ids)} reads...")
-        use_amp = self.config.float_dtype == "float16" and self.device.type =="cuda"
-        
-        with torch.no_grad():
-            iterator = tqdm.tqdm(dataloader, desc="Processing") if show_progress else dataloader
-            
-            for batch in iterator:
-                # Move batch to device
-                inputs = {
-                    key: tensor.to(self.device) 
-                    for key, tensor in batch["inputs"].items()
-                }
-                
-                # Run model
-                with torch.amp.autocast(device_type=self.device.type, enabled=use_amp):
-                    outputs = self.model(**inputs)
-                
-                # Process each read in the batch
-                for i, read_id in enumerate(batch["metadata"]["read_id"]):
 
-                    # Calculate number of chunks
-                    num_chunks = int(batch["metadata"]["num_tokens"][i])
-                    
-                    logits = {}
-                    logits['seq_class'] = outputs['seq_class'][i].cpu().numpy()
-                    logits['seq2seq'] = outputs['seq2seq'][i].cpu().numpy()[:num_chunks]
-                    
-                    # Add to results
-                    results._add(
-                        read_id=read_id,
-                        logits=logits,
-                        num_chunks=num_chunks
-                    )
-        
-        # Update timing
-        results.metadata.total_inference_time = time.time() - start_time
-        
-        # Save if requested
+        # queue holds *individual* pre-processed read dicts
+        sample_queue: "queue.Queue[Optional[Dict]]" = queue.Queue(
+            maxsize=batch_size * self.queue_size_mult
+        )
+
+        # --- producer thread -------------------------------------------------
+        producer = threading.Thread(
+            target=self._producer_worker,
+            kwargs=dict(
+                pod5_paths=pod5_paths,
+                read_ids=read_ids,
+                sample_queue=sample_queue,
+                show_progress=show_progress,
+            ),
+            daemon=True,
+            name="pod5-producer",
+        )
+        producer.start()
+
+        # --- consumer loop (GPU) --------------------------------------------
+        self._consumer_loop(
+            sample_queue=sample_queue,
+            results=results,
+            batch_size=batch_size,
+        )
+
+        producer.join()
+        results.metadata.total_inference_time = time.time() - start
+
         if save_path:
             results.save(save_path)
-            print(f"Results saved to {save_path}")
-        
-        print(f"Done! Processed {len(results)} reads in {results.metadata.total_inference_time:.2f}s")
+            logger.info("Results saved to %s", save_path)
+
+        logger.info(
+            "Done – processed %d reads in %.2fs",
+            len(results),
+            results.metadata.total_inference_time,
+        )
         return results
-    
-    
-    def get_model_info(self) -> Dict[str, Any]:
-        """Get information about the loaded model."""
-        return {
-            "config": self.config.__dict__,
-            "num_parameters": self.model_loader.get_num_parameters(),
-            "device": str(self.device),
-            "dtype": self.config.float_dtype,
-        }
+
+    # ---------- producer / consumer helpers ---------------------------------
+    def _producer_worker(
+        self,
+        *,
+        pod5_paths: Path,
+        sample_queue: "queue.Queue[Optional[Dict]]",
+        read_ids: Optional[List[str]],
+        show_progress: bool,
+    ) -> None:
+        """CPU thread: stream reads → standardise → chunk → queue."""
+        try:
+            with pod5.DatasetReader(
+                pod5_paths, recursive=True, max_cached_readers=4, threads=4
+            ) as reader:
+                # select reads
+                reads_iter = (
+                    reader.reads(selection={UUID(r) for r in read_ids})
+                    if read_ids
+                    else reader.reads()
+                )
+                if show_progress:
+                    reads_iter = tqdm.tqdm(
+                        reads_iter,
+                        desc="Reading",
+                        total=len(read_ids) if read_ids else None,
+                        leave=False,
+                    )
+
+                for rec in reads_iter:
+                    try:
+                        sample_queue.put(self._process_record(rec), block=True)
+                    except Exception as exc:
+                        logger.warning("Failed on read %s: %s", rec.read_id, exc)
+        finally:
+            # sentinel to tell consumer we are done
+            sample_queue.put(None)
+
+    def _consumer_loop(
+        self,
+        *,
+        sample_queue: "queue.Queue[Optional[Dict]]",
+        results: InferenceResults,
+        batch_size: int,
+    ) -> None:
+        """Main thread: pop samples, build batches, run GPU, write results."""
+        current_batch: List[Dict] = []
+        finished = False
+
+        while not finished:
+            sample = sample_queue.get()
+            if sample is None:
+                finished = True
+            else:
+                current_batch.append(sample)
+
+            if finished or len(current_batch) == batch_size:
+                if current_batch:
+                    self._run_gpu_batch(current_batch, results)
+                    current_batch = []
+
+    # ---------- GPU execution ----------------------------------------------
+    def _run_gpu_batch(self, batch: List[Dict], results: InferenceResults) -> None:
+        """Collate, push to GPU, run model, store logits."""
+        batch_t = collate_fn([batch,])
+
+        inputs = {k: v.to(self.device) for k, v in batch_t["inputs"].items()}
+        use_amp = self.config.float_dtype == "float16" and self.device != "cpu"
+
+        with torch.no_grad(), torch.amp.autocast(
+            device_type=self.device, enabled=use_amp
+        ):
+            outputs = self.model(**inputs)
+
+        for i, read_id in enumerate(batch_t["metadata"]["read_id"]):
+            num_chunks = int(batch_t["metadata"]["num_tokens"][i])
+            logits = dict(
+                seq_class=outputs["seq_class"][i].cpu().numpy(),
+                seq2seq=outputs["seq2seq"][i].cpu().numpy()[:num_chunks],
+            )
+            results._add(read_id=read_id, logits=logits, num_chunks=num_chunks)
+
+    # ---------- record-level helpers ---------------------------------------
+    def _process_record(self, rec: pod5.Record) -> Dict:
+        """Return a single pre-processed sample dict for one read."""
+        dtype = np.float64 if self.config.float_dtype == "float64" else np.float32
+        sig = rec.signal.astype(dtype)
+        sig = self._local_standardize(sig)
+        sig = load_signal(
+            sig,
+            window_size=self.config.chunk_size,
+            step_size=self.config.chunk_size,
+            max_seq_len=self.config.max_seq_len,
+        )
+        sig = sig.astype(dtype)
+        return dict(
+            inputs=dict(signal=sig, length=sig.shape[0]),
+            metadata=dict(read_id=str(rec.read_id), num_tokens=sig.shape[0]),
+        )
+
+    @staticmethod
+    def _local_standardize(signal: np.ndarray) -> np.ndarray:
+        """Per-read z-score normalisation."""
+        return SequenceStandardizer().fit_transform(
+            [signal.reshape(-1, 1)]
+        )[0].ravel()
+
+    # ---------- utilities ---------------------------------------------------
+    @staticmethod
+    def _load_config(cfg: Union[ModelConfig, str, Dict]) -> ModelConfig:
+        if isinstance(cfg, ModelConfig):
+            return cfg
+        if isinstance(cfg, str):
+            if cfg.endswith(".yaml"):
+                return ModelConfig.from_yaml(cfg)
+            if cfg.endswith(".json"):
+                return ModelConfig.from_json(cfg)
+            raise ValueError(f"Unsupported config file type: {cfg}")
+        if isinstance(cfg, dict):
+            return ModelConfig.from_dict(cfg)
+        raise TypeError("config must be ModelConfig | str | dict")
     
     def _normalize_to_path_list(self, paths: PathLikeList) -> List[Path]:
         if isinstance(paths, (str, Path)):
@@ -224,9 +241,26 @@ class Inference:
             return [Path(p) for p in paths]
         else:
             raise TypeError(f"Expected str, Path, or list of them, got {type(paths).__name__}")
-    
+
+
+    def _build_metadata(self, pod5_path: Path, batch_size: int) -> InferenceMetadata:
+        return InferenceMetadata(
+            chunk_size=self.config.chunk_size,
+            max_seq_len=self.config.max_seq_len,
+            model_type=getattr(self.config, "model_type", "transformer"),
+            num_classes=self.config.num_classes,
+            num_classes_seq2seq=getattr(self.config, "num_classes_seq2seq", 4),
+            label_names=self.config.label_names,
+            batch_size=batch_size,
+            device=str(self.device),
+            float_dtype=self.config.float_dtype,
+            model_checkpoint=str(getattr(self.config, "checkpoint_path", None)),
+            pod5_paths=pod5_path,
+        )
+
+    # ---------- context manager --------------------------------------------
     def __enter__(self) -> "Inference":
         return self
-    
+
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
         pass
