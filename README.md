@@ -1,6 +1,16 @@
 # tRNA_zap
 tRNA ionic current model and alignment tools
 
+# Installation
+
+To install the repository, refer to the following instructions:
+
+```bash
+git clone https://github.com/genometechlab/tRNA_zap.git
+cd tRNA_zap
+pip install -e .
+```
+
 
 # Splitter Module
 
