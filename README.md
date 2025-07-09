@@ -11,8 +11,6 @@ To use the module, 1) download a model and its configuration from the available 
 ## Available models
 
 
----
-
 | Model Name           | Config File                             | Model Weights                          | Description                                 |
 |----------------------|------------------------------------------|----------------------------------------|---------------------------------------------|
 | `zap_s54_c127`       | [`zap_s54_c127.yaml`](./configs/zap_s54_c127.yaml) | [`zap_s54_c127.pth`](./checkpoints/zap_s54_c127.pth) | Standard classifier trained on yeast and ecoli
@@ -34,7 +32,7 @@ Please download one of the specified models and its config file from the table a
 
 > 💡 **Tip:** The path to the model weights file is specified inside the YAML configuration (`checkpoint_path`). If you want to move the weights to a different directory, be sure to update that path in the config file accordingly.
 
-## Inference + Visualization Example
+## Inference run example
 
 ```python
 # From the splitter module, import Inference and ResultsVisualizer classes
@@ -44,18 +42,22 @@ from tRNA_zap.splitter import Inference, ResultsVisualizer
 pod5_pth = ['Path/To/pod5/file', 'Path/to/pod5/dir1', 'Path/to/pod5/dir2', ...]
 
 # Specify the reads you want to run inference on
-desired_reads = [...]  # A list of read UUIDs as strings
+desired_reads = [...]  # A list of read IDs as strings, 
 
 # Load inference engine from a configuration file
-config_pth = "./configs/zap_s54_c127.yaml"
-infer_engine = Inference(config_pth, device="cuda")
+config_pth = "/patch/to/config.yaml"
+
+# Device used for inference. For fast inference, use a cuda-enabled GPU. 
+#Can use cpu for a small number of read IDs
+device = "cuda" 
+
+infer_engine = Inference(config_pth, device=device)
 
 # Run inference
 results = infer_engine.predict(
     pod5_paths=pod5_pth,
-    read_ids=desired_reads,
-    batch_size=2048,
-    num_workers=4
+    read_ids=desired_reads, # if not provided, will perform inference on every read ID in pod5s
+    batch_size=2048, # Number of read IDs to be processed in one batch
 )
 ```
 
@@ -66,6 +68,10 @@ An explanation on how to use and interact with this isntance is provided below
 ## `InferenceResults`
 
 The `InferenceResults` object is a lightweight container that stores all outputs from an inference run, indexed by read ID. It also includes relevant metadata and supports basic persistence and inspection.
+
+```python
+results = infer_engine.predict(...)
+```
 
 
 - #### `results[read_id] -> ReadResult`
@@ -119,7 +125,7 @@ The `InferenceResults` object is a lightweight container that stores all outputs
 
     ```python
     summary = results.label_names
----
+    ```
 
 ## ReadResult
 
@@ -127,9 +133,9 @@ Each value corresponding to a read_id key in InferenceResults is a ReadResult ob
 
 You do not need to create this class manually — it is returned when you access a read ID from InferenceResults:
 
-    read_result = inference_results["read_id"]
-
----
+```python
+read_result = inference_results["read_id"]
+```
 
 - #### read_result.seq2seq_preds -> Optional[np.ndarray]
 
@@ -139,8 +145,6 @@ You do not need to create this class manually — it is returned when you access
         chunk_predictions = read_result.seq2seq_preds
     ```
 
----
-
 - #### read_result.classification_pred -> Optional[int]
 
     Predicted class index for the whole read.
@@ -148,8 +152,6 @@ You do not need to create this class manually — it is returned when you access
     ```python
         label_index = read_result.classification_pred
     ```
-
----
 
 - #### read_result.classification_pred_cls -> Optional[str]
 
@@ -159,8 +161,6 @@ You do not need to create this class manually — it is returned when you access
         label_name = read_result.classification_pred_cls
     ```
 
----
-
 - #### read_result.seq2seq_probs -> Optional[np.ndarray]
 
     Softmax probabilities for each class at each chunk position (seq2seq task).
@@ -169,8 +169,6 @@ You do not need to create this class manually — it is returned when you access
         probs = read_result.seq2seq_probs
     ```
 
----
-
 - #### read_result.classification_probs -> Optional[np.ndarray]
 
     Softmax probabilities for the read-level classification task.
@@ -178,8 +176,6 @@ You do not need to create this class manually — it is returned when you access
     ```python
         probs = read_result.classification_probs
     ```
-
----
 
 - #### read_result.preds -> Dict[str, Any]
 
@@ -192,8 +188,6 @@ You do not need to create this class manually — it is returned when you access
         }
     ```
 
----
-
 - #### read_result.probs -> Dict[str, np.ndarray]
 
     Dictionary containing probability outputs for both tasks.
@@ -205,8 +199,6 @@ You do not need to create this class manually — it is returned when you access
         }
     ```
 
----
-
 - #### read_result.variable_region_range -> Tuple[int, int]
 
     Start and end indices (inclusive) of the predicted variable region in the chunked signal. Returns (-1, -1) if no region is found.
@@ -214,9 +206,7 @@ You do not need to create this class manually — it is returned when you access
     ```python
         start, end = read_result.variable_region_range
     ```
-
----
-
+    
 - #### read_result.get_smoothed_seq2seq_preds(...) -> Optional[np.ndarray]
 
     Returns smoothed seq2seq predictions using CRF-based smoothing (if available).
