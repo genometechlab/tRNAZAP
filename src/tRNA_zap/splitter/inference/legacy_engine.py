@@ -1,0 +1,232 @@
+import os
+import warnings
+import time
+from typing import List, Dict, Any, Optional, Union
+import numpy as np
+import torch
+import torch.nn.functional as F
+from torch.nn.utils.rnn import pad_sequence
+from torch.utils.data import DataLoader
+import tqdm
+import pod5
+
+from pathlib import Path
+from uuid import UUID
+
+from ..feeders import Pod5IterDataset, SequenceStandardizer, collate_fn
+from ..config.model_config import ModelConfig, ModelLoader
+from ..storages import InferenceResults, InferenceMetadata, ReadResult
+
+#warnings.filterwarnings("ignore", category=UserWarning)
+
+PathLike = Union[str, Path]
+PathLikeList = Union[PathLike, List[PathLike]]
+
+class Inference:
+    """Main inference engine for running predictions on Pod5 files."""
+    
+    def __init__(
+        self,
+        config: Union[ModelConfig, str, Dict[str, Any]],
+        device: Optional[torch.device] = None,
+    ):
+        """
+        Initialize InferenceEngine.
+        
+        Args:
+            config: ModelConfig instance, path to config file, or config dictionary
+            device: torch device to run inference on
+        """
+        # Load configuration
+        if isinstance(config, str):
+            if config.endswith('.yaml'):
+                self.config = ModelConfig.from_yaml(config)
+            elif config.endswith('.json'):
+                self.config = ModelConfig.from_json(config)
+            else:
+                raise ValueError(f"Unsupported config file format: {config}")
+        elif isinstance(config, dict):
+            self.config = ModelConfig.from_dict(config)
+        elif isinstance(config, ModelConfig):
+            self.config = config
+        else:
+            raise TypeError("config must be ModelConfig, path to config file, or dict")
+        
+        # Set device
+        self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        if isinstance(self.device, str):
+            self.device = torch.device(self.device)
+        
+        # Initialize model loader
+        self.model_loader = ModelLoader(self.config, self.device)
+        self.model = None
+        
+        # Initialize model
+        self._initialize_model()
+        
+    def _initialize_model(self):
+        """Initialize and load model."""
+        self.model = self.model_loader.get_model(load_checkpoint=True)
+        self.model.eval()
+        
+    @staticmethod
+    def _local_standardizer(signal):
+        """Standardize the input signal."""
+        standardizer = SequenceStandardizer()
+        return standardizer.fit_transform([signal.reshape(-1, 1)])[0].flatten()
+    
+    
+    def _prepare_dataset(self, pod5_paths: Union[str, List[str]], read_ids: List[str], batch_size: int) -> Pod5IterDataset:
+        """Prepare dataset for inference."""
+        dtype = "float64" if self.config.float_dtype == "float64" else "float32"
+        
+        dataset_params = {
+            "batch_size": batch_size,
+            "window_size": self.config.chunk_size,
+            "step_size": self.config.chunk_size,
+            "max_seq_len": self.config.max_seq_len,
+            "transform": self._local_standardizer,
+            "dtype": dtype,
+        }
+        
+        dataset = Pod5IterDataset(
+            read_ids=read_ids,
+            pod5_paths=pod5_paths,
+            **dataset_params,
+        )
+        
+        return dataset
+
+    
+    def predict(
+        self,
+        pod5_paths: Union[str, List[str]],
+        read_ids: List[str],
+        batch_size: int = 32,
+        num_workers: int = 4,
+        save_path: Optional[str] = None,
+        show_progress: bool = True,
+    ) -> InferenceResults:
+        """
+        Run inference on specific read-ids in a Pod5 files.
+        
+        Args:
+            pod5_paths: Path(s) to Pod5 files or directories
+            read_ids: List of read IDs to process
+            batch_size: Batch size for processing
+            num_workers: Number of workers for data loading
+            save_path: Path to save results (optional)
+            show_progress: Whether to show progress bar
+            
+        Returns:
+            InferenceResults object containing all results and metadata
+        """
+        start_time = time.time()
+        pod5_paths = self._normalize_to_path_list(pod5_paths)
+        
+        # Create metadata
+        metadata = InferenceMetadata(
+            # Model configuration
+            chunk_size=self.config.chunk_size,
+            max_seq_len=self.config.max_seq_len,
+            model_type=self.config.model_type if hasattr(self.config, 'model_type') else 'transformer_zam',
+            num_classes=self.config.num_classes,
+            num_classes_seq2seq=getattr(self.config, 'num_classes_seq2seq', 4),
+
+            # Label names
+            label_names = self.config.label_names,
+            
+            # Inference settings
+            batch_size=batch_size,
+            device=str(self.device),
+            float_dtype=self.config.float_dtype,
+            
+            # Run information
+            model_checkpoint=str(self.config.checkpoint_path) if self.config.checkpoint_path else None,
+            pod5_paths=pod5_paths,
+        )
+        
+        # Create results container
+        results = InferenceResults(metadata=metadata)
+        
+        # Prepare dataset
+        dataset = self._prepare_dataset(pod5_paths, read_ids, batch_size)
+        
+        # Create data loader
+        dataloader = DataLoader(
+            dataset,
+            batch_size=1,
+            num_workers=num_workers,
+            collate_fn=collate_fn,
+            shuffle=False,
+        )
+        
+        # Run inference
+        print(f"Running inference on {len(read_ids)} reads...")
+        use_amp = self.config.float_dtype == "float16" and self.device.type =="cuda"
+        
+        with torch.no_grad():
+            iterator = tqdm.tqdm(dataloader, desc="Processing") if show_progress else dataloader
+            
+            for batch in iterator:
+                # Move batch to device
+                inputs = {
+                    key: tensor.to(self.device) 
+                    for key, tensor in batch["inputs"].items()
+                }
+                
+                # Run model
+                with torch.amp.autocast(device_type=self.device.type, enabled=use_amp):
+                    outputs = self.model(**inputs)
+                
+                # Process each read in the batch
+                for i, read_id in enumerate(batch["metadata"]["read_id"]):
+
+                    # Calculate number of chunks
+                    num_chunks = int(batch["metadata"]["num_tokens"][i])
+                    
+                    logits = {}
+                    logits['seq_class'] = outputs['seq_class'][i].cpu().numpy()
+                    logits['seq2seq'] = outputs['seq2seq'][i].cpu().numpy()[:num_chunks]
+                    
+                    # Add to results
+                    results._add(
+                        read_id=read_id,
+                        logits=logits,
+                        num_chunks=num_chunks
+                    )
+        
+        # Update timing
+        results.metadata.total_inference_time = time.time() - start_time
+        
+        # Save if requested
+        if save_path:
+            results.save(save_path)
+            print(f"Results saved to {save_path}")
+        
+        print(f"Done! Processed {len(results)} reads in {results.metadata.total_inference_time:.2f}s")
+        return results
+    
+    
+    def get_model_info(self) -> Dict[str, Any]:
+        """Get information about the loaded model."""
+        return {
+            "config": self.config.__dict__,
+            "num_parameters": self.model_loader.get_num_parameters(),
+            "device": str(self.device),
+            "dtype": self.config.float_dtype,
+        }
+    
+    def _normalize_to_path_list(self, paths: PathLikeList) -> List[Path]:
+        if isinstance(paths, (str, Path)):
+            return [Path(paths)]
+        elif isinstance(paths, list):
+            return [Path(p) for p in paths]
+        else:
+            raise TypeError(f"Expected str, Path, or list of them, got {type(paths).__name__}")
+    
+    def __enter__(self) -> "Inference":
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        pass
