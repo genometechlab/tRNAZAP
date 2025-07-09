@@ -63,7 +63,7 @@ and will segment the read into variable region, ONT adapter, 3' and 5' splint re
 
 ```python
 # From the splitter module, import Inference and ResultsVisualizer classes
-from tRNA_zap.splitter import Inference, ResultsVisualizer
+from trnazap.splitter import Inference, ResultsVisualizer
 
 # Specify your pod5 paths. This can be a single file or a list of directories
 pod5_pth = ['Path/To/pod5/file', 'Path/to/pod5/dir1', 'Path/to/pod5/dir2', ...]
