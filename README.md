@@ -121,64 +121,113 @@ The `InferenceResults` object is a lightweight container that stores all outputs
     summary = results.label_names
 ---
 
-## `ReadResult`
+## ReadResult
 
-Each value corresponds to a read_id key in `InferenceResults` is a `ReadResult` object. It contains the model outputs for a single read. Probabilities and predictions can be directly accessed from this object.
+Each value corresponding to a read_id key in InferenceResults is a ReadResult object. It stores the model outputs for a single read. Probabilities and predictions for both sequence-level and read-level tasks can be accessed directly from this object.
 
-You do not need to create this class manually — it is returned when you access a read ID from `InferenceResults`.
+You do not need to create this class manually — it is returned when you access a read ID from InferenceResults:
 
+    read_result = inference_results["read_id"]
 
-- #### `read_results.seq2seq_preds -> List[int]`
+---
+
+- #### read_result.seq2seq_preds -> Optional[np.ndarray]
 
     Predicted class indices for each chunk in the read (from the seq2seq task).
 
     ```python
-    chunk_predictions = read_result.seq2seq_preds
+        chunk_predictions = read_result.seq2seq_preds
     ```
 
-- #### `read_results.classification_pred -> int`
+---
+
+- #### read_result.classification_pred -> Optional[int]
 
     Predicted class index for the whole read.
-    > 💡 **Tip:** If you would prefer to get the exact class names instead of the class label index, use the label_names from the InferenceResults instance
-
 
     ```python
-    label = read_result.classification_pred # Returns class label index
-    cls_name = results.label_names[label] # Return the class name
+        label_index = read_result.classification_pred
     ```
 
-- #### `read_results.seq2seq_probs -> Optional[np.ndarray]`
+---
 
-    Softmax probabilities for each class at each chunk position.
+- #### read_result.classification_pred_cls -> Optional[str]
+
+    Predicted class label (name) for the whole read. Uses the label names from InferenceMetadata.
 
     ```python
-    probs = read_result.seq2seq_probs
+        label_name = read_result.classification_pred_cls
     ```
 
-- #### `read_results.classification_probs -> Optional[np.ndarray]`
+---
+
+- #### read_result.seq2seq_probs -> Optional[np.ndarray]
+
+    Softmax probabilities for each class at each chunk position (seq2seq task).
+
+    ```python
+        probs = read_result.seq2seq_probs
+    ```
+
+---
+
+- #### read_result.classification_probs -> Optional[np.ndarray]
 
     Softmax probabilities for the read-level classification task.
 
     ```python
-    probs = read_result.classification_probs
+        probs = read_result.classification_probs
     ```
 
-- #### `read_result.preds`
+---
 
-    Returns a dictionary with both prediction types:
+- #### read_result.preds -> Dict[str, Any]
+
+    Dictionary containing predictions for both tasks.
+
     ```python
-    {
-        "seq_class": read_result.classification_pred,
-        "seq2seq": read_result.seq2seq_preds
-    }
+        {
+            "seq_class": read_result.classification_pred,
+            "seq2seq": read_result.seq2seq_preds
+        }
     ```
 
-- #### `read_result.probs`
+---
 
-    Returns a dictionary with both probability outputs:
+- #### read_result.probs -> Dict[str, np.ndarray]
+
+    Dictionary containing probability outputs for both tasks.
+
     ```python
-    {
-        "seq_class": read_result.classification_probs,
-        "seq2seq": read_result.seq2seq_probs
-    }
+        {
+            "seq_class": read_result.classification_probs,
+            "seq2seq": read_result.seq2seq_probs
+        }
+    ```
+
+---
+
+- #### read_result.variable_region_range -> Tuple[int, int]
+
+    Start and end indices (inclusive) of the predicted variable region in the chunked signal. Returns (-1, -1) if no region is found.
+
+    ```python
+        start, end = read_result.variable_region_range
+    ```
+
+---
+
+- #### read_result.get_smoothed_seq2seq_preds(...) -> Optional[np.ndarray]
+
+    Returns smoothed seq2seq predictions using CRF-based smoothing (if available).
+
+    Parameters:
+    - device (default: 'cpu'): Device to run the CRF on
+    - return_variable_region_range (default: False): Whether to also return (start, end) range
+
+    ```python
+        smoothed_preds = read_result.get_smoothed_seq2seq_preds()
+
+        # or with variable region range:
+        smoothed_preds, (start, end) = read_result.get_smoothed_seq2seq_preds(return_variable_region_range=True)
     ```
