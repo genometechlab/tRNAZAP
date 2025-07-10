@@ -175,17 +175,12 @@ read_result = inference_results["read_id"]
 - #### read_result.classification_pred -> Optional[int]
 
     Predicted class index for the whole read.
+    > 💡 **Tip:** If you would prefer to get the exact class names instead of the class label index, use the label_names from the InferenceResults instance
+
 
     ```python
         label_index = read_result.classification_pred
-    ```
-
-- #### read_result.classification_pred_cls -> Optional[str]
-
-    Predicted class label (name) for the whole read. Uses the label names from InferenceMetadata.
-
-    ```python
-        label_name = read_result.classification_pred_cls
+        cls_name = results.label_names[label] # Return the class name
     ```
 
 - #### read_result.seq2seq_probs -> Optional[np.ndarray]
@@ -228,7 +223,7 @@ read_result = inference_results["read_id"]
 
 - #### read_result.variable_region_range -> Tuple[int, int]
 
-    Start and end indices (inclusive) of the predicted variable region in the chunked signal. Returns (-1, -1) if no region is found.
+    Start and end indices (inclusive) of the predicted variable region in the signal. Returns (-1, -1) if no region is found.
 
     ```python
         start, end = read_result.variable_region_range
