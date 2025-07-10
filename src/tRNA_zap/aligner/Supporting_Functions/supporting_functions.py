@@ -10,6 +10,7 @@ import subprocess
 import pysam
 
 from Alignment_Functions import align_read
+from tRNAzap.Inference
 
 
 def get_model_to_ref():
