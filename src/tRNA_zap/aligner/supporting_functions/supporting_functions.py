@@ -9,7 +9,7 @@ import subprocess
 
 import pysam
 
-from Alignment_Functions import align_read
+from alignment_functions import align_read
 from tRNAzap.Inference
 
 
