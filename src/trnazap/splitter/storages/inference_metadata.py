@@ -36,7 +36,7 @@ class InferenceMetadata:
     
     def __repr__(self) -> str:
         return (f"InferenceMetadata(chunk_size={self.chunk_size}, "
-                f"model_name='{self.model_type}', "
+                f"model_name='{self.model_name}', "
                 f"chunk_size='{self.chunk_size}', "
                 f"num_reads={self.num_reads_processed})")
 
