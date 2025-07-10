@@ -16,7 +16,7 @@ from supporting_functions.supporting_functions import (
     split_read_ids,
 )
 
-program_name = "tRNA_zap"
+program_name = "trnazap"
 version = "05_16_25_v0.1.2"
 
 
