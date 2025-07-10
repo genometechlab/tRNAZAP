@@ -15,6 +15,7 @@ class InferenceMetadata:
     chunk_size: int
     max_seq_len: int
     model_type: str
+    model_name: str
     num_classes: int
     num_classes_seq2seq: int
 
