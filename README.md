@@ -1,5 +1,25 @@
+![tRNAZAP](images/logo.png)
 # tRNA_zap
 tRNA ionic current model and alignment tools
+
+## Table of Contents
+
+- [Installation](#installation)
+- [Splitter Module](#splitter-module)
+  - [Available models](#available-models)
+  - [Inference](#inference)
+    - [InferenceResults](#inferenceresults)
+    - [Readresult](#readresult)
+  - [Visualization](#visualization)
+# Installation
+
+To install the repository, refer to the following instructions:
+
+```bash
+git clone https://github.com/genometechlab/tRNA_zap.git
+cd tRNA_zap
+pip install -e .
+```
 
 
 # Splitter Module
@@ -13,7 +33,8 @@ To use the module, 1) download a model and its configuration from the available 
 
 | Model Name           | Config File                             | Model Weights                          | Description                                 |
 |----------------------|------------------------------------------|----------------------------------------|---------------------------------------------|
-| `zap_s54_c127`       | [`zap_s54_c127.yaml`](./configs/zap_s54_c127.yaml) | [`zap_s54_c127.pth`](./checkpoints/zap_s54_c127.pth) | Standard classifier trained on yeast and ecoli
+| `zap_s54_c127`       | [`zap_s54_c127.yaml`](./configs/zap_s54_c127.yaml) | [`zap_s54_c127.pth`](https://drive.google.com/file/d/1yyARBD3sCos3VFiau0HcJh0fHVNt2vz3/view?usp=drive_link) | Standard classifier trained on yeast and ecoli
+| `zap_s54_c49_IVTecoli`       | [`zap_s54_c49_IVTecoli.yaml`](./configs/zap_s54_c49_IVTecoli.yaml) | [`zap_s54_c49_IVTecoli.pth`](https://drive.google.com/file/d/1ieS6WQlp-eIdsbWARbZ0RVFdR_QO0KRF/view?usp=drive_link) | Standard classifier trained on ecoli only
 
 ---
 
@@ -32,11 +53,17 @@ Please download one of the specified models and its config file from the table a
 
 > 💡 **Tip:** The path to the model weights file is specified inside the YAML configuration (`checkpoint_path`). If you want to move the weights to a different directory, be sure to update that path in the config file accordingly.
 
-## Inference run example
+## Inference
+
+The inference module will ran the model on each of the read_ids     
+It will classify the read, as part of the classification task,   
+and will segment the read into variable region, ONT adapter, 3' and 5' splint regions
+
+#### Inference run example
 
 ```python
 # From the splitter module, import Inference and ResultsVisualizer classes
-from tRNA_zap.splitter import Inference, ResultsVisualizer
+from trnazap.splitter import Inference, ResultsVisualizer
 
 # Specify your pod5 paths. This can be a single file or a list of directories
 pod5_pth = ['Path/To/pod5/file', 'Path/to/pod5/dir1', 'Path/to/pod5/dir2', ...]
@@ -65,7 +92,7 @@ You will get an `InferenceResults` object as the return value of `Inference.pred
 An explanation on how to use and interact with this isntance is provided below
 
 
-## `InferenceResults`
+### `InferenceResults`
 
 The `InferenceResults` object is a lightweight container that stores all outputs from an inference run, indexed by read ID. It also includes relevant metadata and supports basic persistence and inspection.
 
@@ -127,7 +154,7 @@ results = infer_engine.predict(...)
     summary = results.label_names
     ```
 
-## ReadResult
+### ReadResult
 
 Each value corresponding to a read_id key in InferenceResults is a ReadResult object. It stores the model outputs for a single read. Probabilities and predictions for both sequence-level and read-level tasks can be accessed directly from this object.
 
@@ -148,17 +175,12 @@ read_result = inference_results["read_id"]
 - #### read_result.classification_pred -> Optional[int]
 
     Predicted class index for the whole read.
+    > 💡 **Tip:** If you would prefer to get the exact class names instead of the class label index, use the label_names from the InferenceResults instance
+
 
     ```python
         label_index = read_result.classification_pred
-    ```
-
-- #### read_result.classification_pred_cls -> Optional[str]
-
-    Predicted class label (name) for the whole read. Uses the label names from InferenceMetadata.
-
-    ```python
-        label_name = read_result.classification_pred_cls
+        cls_name = results.label_names[label] # Return the class name
     ```
 
 - #### read_result.seq2seq_probs -> Optional[np.ndarray]
@@ -201,7 +223,7 @@ read_result = inference_results["read_id"]
 
 - #### read_result.variable_region_range -> Tuple[int, int]
 
-    Start and end indices (inclusive) of the predicted variable region in the chunked signal. Returns (-1, -1) if no region is found.
+    Start and end indices (inclusive) of the predicted variable region in the signal. Returns (-1, -1) if no region is found.
 
     ```python
         start, end = read_result.variable_region_range
@@ -221,3 +243,32 @@ read_result = inference_results["read_id"]
         # or with variable region range:
         smoothed_preds, (start, end) = read_result.get_smoothed_seq2seq_preds(return_variable_region_range=True)
     ```
+---
+
+## Visualization
+
+The visualization module allows to visualize the results of inference.
+You will be able to plot a signal and each segment to get a sense of the model's performance.
+
+#### Visualization run example
+
+```python
+from trnazap.splitter import ResultsVisualizer
+
+
+# Initialize an instance of 'ResultsVisualizer'
+# using an isntance of 'InferenceResults'
+
+with ResultsVisualizer(results2) as res_vis:
+    # Use the visualize method to visualize the inference results
+    # naturally, your requested readID should be in the inference results
+    # Note that you can either pass a single read_id to this method, or a list of read_ids
+    # a single matplotlib figure of a list of figures will be returned based on the input
+    fig_ = res_vis.visualize('readID_123')
+
+# OR
+
+res_vis = ResultsVisualizer(results2)
+fig_ = res_vis.visualize('readID_123')
+fig_.close()
+```

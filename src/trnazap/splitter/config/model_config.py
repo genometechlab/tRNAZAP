@@ -29,6 +29,9 @@ class ModelConfig:
     positional_encoding_type: str
     dropout: float
 
+    # Model information
+    model_name: str
+
     # Training parameters
     float_dtype: str
     

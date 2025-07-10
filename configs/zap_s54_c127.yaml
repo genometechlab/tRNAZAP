@@ -2,6 +2,7 @@ chunk_size: 54
 max_seq_len: 1200
 num_classes: 127
 num_classes_seq2seq: 4
+model_name: "zap_s54_c127"
 nhead: 4
 num_layers: 4
 hidden_size: 256

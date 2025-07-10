@@ -248,6 +248,7 @@ class Inference:
             chunk_size=self.config.chunk_size,
             max_seq_len=self.config.max_seq_len,
             model_type=getattr(self.config, "model_type", "transformer"),
+            model_name=self.config.model_name,
             num_classes=self.config.num_classes,
             num_classes_seq2seq=getattr(self.config, "num_classes_seq2seq", 4),
             label_names=self.config.label_names,
