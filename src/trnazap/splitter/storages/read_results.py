@@ -4,13 +4,18 @@ ReadResult class for storing individual read inference results.
 
 import torch
 import numpy as np
+import pickle
+from pathlib import Path
 from typing import Union, Optional, Dict, TYPE_CHECKING
 from dataclasses import dataclass
+import logging
+
 
 if TYPE_CHECKING:
     from .inference_results import InferenceResults
     from .inference_metadata import InferenceMetadata
 
+logger = logging.getLogger(__name__)
 
 @dataclass
 class ReadResult:
@@ -19,18 +24,7 @@ class ReadResult:
     read_id: str
     _logits: Dict[str, np.ndarray]  # e.g., {'seq2seq': array, 'seq_class': array}
     num_chunks: int
-    _back_reference: Optional["InferenceResults"] = None  # Reference to parent InferenceResults
-
-    # ------------------------------------------------------------------------
-    # Internal metadata access
-    # ------------------------------------------------------------------------
-
-    @property
-    def metadata(self) -> Optional["InferenceMetadata"]:
-        """Access parent metadata via back-reference."""
-        if self._back_reference:
-            return self._back_reference.metadata
-        raise ValueError("Reference to results container not found.")
+    chunk_size: int
 
     # ------------------------------------------------------------------------
     # Internal raw logits
@@ -84,7 +78,7 @@ class ReadResult:
     # ------------------------------------------------------------------------
 
     @property
-    def preds(self) -> Dict[str, any]:
+    def preds(self) ->  Dict[str, Union[int, np.ndarray]]:
         """Get predictions for all tasks."""
         return {
             "seq_class": self.classification_pred,
@@ -95,24 +89,15 @@ class ReadResult:
     def seq2seq_preds(self) -> Optional[np.ndarray]:
         """Get seq2seq predictions as indices."""
         if self.seq2seq_probs is not None:
-            return np.argmax(self.seq2seq_probs, axis=-1)
+            return np.argmax(self.seq2seq_logits, axis=-1)
         return None
 
     @property
     def classification_pred(self) -> Optional[int]:
         """Get classification prediction (argmax index)."""
         if self.classification_probs is not None:
-            return int(np.argmax(self.classification_probs))
+            return int(np.argmax(self.classification_logits))
         return None
-
-    @property
-    def classification_pred_cls(self) -> Optional[str]:
-        """Get classification prediction label using metadata."""
-        try:
-            lbl_ind = self.classification_pred
-            return self.metadata.label_names[lbl_ind]
-        except Exception as e:
-            raise e
 
     # ------------------------------------------------------------------------
     # Region detection & smoothing
@@ -139,16 +124,17 @@ class ReadResult:
                     return predictions_smooth, region
                 return predictions_smooth
             except ImportError as e:
-                print(f"[WARNING] Failed to import crf_smoothing: {e}")
+                logger.warning(f"[WARNING] Failed to import crf_smoothing: {e}")
             except Exception as e:
-                print(f"[WARNING] CRF smoothing failed: {e}")
+                logger.warning(f"[WARNING] CRF smoothing failed: {e}")
 
-    @staticmethod
-    def _locate_region_of_interest(preds, region_id: int) -> tuple:
+    def _locate_region_of_interest(self, preds: np.ndarray, region_id: int) -> tuple:
         """Identify the start and end positions of a specific class in predictions."""
         indices = np.where(preds == region_id)[0]
         if indices.size > 0:
-            return (indices[0].item(), indices[-1].item())
+            start_ = indices[0].item()
+            end_ = indices[-1].item()
+            return (start_*self.chunk_size, end_*self.chunk_size)
         return (-1, -1)
 
 
@@ -156,13 +142,37 @@ class ReadResult:
     # Utilities
     # ------------------------------------------------------------------------
 
-    def copy(self, new_back_reference: Optional["InferenceResults"] = None) -> "ReadResult":
+    def copy(self) -> "ReadResult":
         return ReadResult(
             read_id=self.read_id,
             _logits={k: v.copy() for k, v in self._logits.items()},
             num_chunks=self.num_chunks,
-            _back_reference=new_back_reference
         )
+    
+    # ------------------------------------------------------------------------
+    # I/O
+    # ------------------------------------------------------------------------
+
+
+    def save(self, path: Union[str, Path]) -> None:
+        """
+        Save results to pickle file.
+
+        Args:
+            path: Output file path
+        """
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, 'wb') as f:
+            pickle.dump(self, f)
+
+    
+    @classmethod
+    def load(self, path: Union[str, Path]) -> "ReadResult":
+        with open(path, 'rb') as f:
+            result = pickle.load(f)
+        return result
+
 
     # ------------------------------------------------------------------------
     # String representation
