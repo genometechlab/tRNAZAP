@@ -6,10 +6,12 @@ from typing import Dict, List, Optional, Iterator, Tuple, Union, Any
 from pathlib import Path
 import pickle
 import numpy as np
+import logging
 
 from .read_results import ReadResult
 from .inference_metadata import InferenceMetadata
 
+logger = logging.getLogger(__name__)
 
 # =============================================================================
 # InferenceResults Container
@@ -43,8 +45,6 @@ class InferenceResults:
         Args:
             read_result: ReadResult object to add
         """
-        if read_result._back_reference is None:
-            read_result._back_reference = self
         self._results[read_result.read_id] = read_result
         self.metadata.num_reads_processed = len(self._results)
 
@@ -61,7 +61,7 @@ class InferenceResults:
             read_id=read_id,
             _logits=logits,
             num_chunks=num_chunks,
-            _back_reference=self
+            chunk_size=self.metadata.chunk_size
         )
         self._add_result(read_result)
 
@@ -144,40 +144,42 @@ class InferenceResults:
             pickle.dump(self, f)
 
     @classmethod
-    def load(cls, paths: Union[str, Path, List[Union[str, Path]]]) -> 'InferenceResults':
+    def load(cls, paths: Union[str, Path, List[Union[str, Path]]]) -> "InferenceResults":
         """
         Load one or more InferenceResults from pickle file(s).
 
         Args:
-            paths: Path or list of paths to .pkl files
+            paths: Path or list of paths to .pkl files.
 
         Returns:
-            A single InferenceResults instance (merged if multiple files)
+            A single (merged if needed) InferenceResults instance.
         """
         if isinstance(paths, (str, Path)):
-            paths = [paths]  # Normalize to list
+            paths = [paths]
 
-        combined: Optional[InferenceResults] = None
+        loaded_results = []
 
         for path in paths:
             path = Path(path)
             if not path.exists():
                 raise FileNotFoundError(f"File not found: {path}")
-
+            
             with open(path, 'rb') as f:
-                loaded = pickle.load(f)
-                if not isinstance(loaded, cls):
-                    raise TypeError(f"File {path} does not contain InferenceResults.")
+                result = pickle.load(f)
+            
+            if not isinstance(result, cls):
+                raise TypeError(f"File '{path}' does not contain an InferenceResults object.")
 
-                if combined is None:
-                    combined = loaded
-                else:
-                    combined = combined + loaded
+            loaded_results.append(result)
 
-        if combined is None:
-            raise ValueError("No valid InferenceResults loaded.")
+        if len(loaded_results) == 1:
+            return loaded_results[0]
+        elif len(loaded_results)>1:
+            return cls.merge(*loaded_results)
+        else:
+            raise ValueError(f"No Path is provided")
 
-        return combined
+
 
     # -------------------------------------------------------------------------
     # Utility
@@ -201,47 +203,50 @@ class InferenceResults:
     # Dunder Methods
     # -------------------------------------------------------------------------
 
-    def __add__(self, other: "InferenceResults") -> "InferenceResults":
+    @classmethod
+    def merge(cls, *results: "InferenceResults") -> "InferenceResults":
         """
-        Combine two InferenceResults objects.
+        Merge multiple InferenceResults instances into one.
 
         Args:
-            other: Another InferenceResults instance
+            *results: One or more InferenceResults objects.
 
         Returns:
-            Combined InferenceResults
+            A single merged InferenceResults instance.
 
         Notes:
+            - Assumes all metadata are compatible (model name, chunk size, max_seq_len).
             - Skips duplicate read IDs with a warning.
-            - Ensures metadata compatibility (model name, chunk size, max seq len).
         """
-        if not isinstance(other, InferenceResults):
-            raise ValueError("Argument must be an instance of InferenceResults.")
+        if not results:
+            raise ValueError("At least one InferenceResults instance must be provided.")
 
-        if self.metadata.model_name != other.metadata.model_name:
-            raise ValueError("Cannot add results from different models.")
+        base = results[0]
 
-        if self.metadata.chunk_size != other.metadata.chunk_size:
-            raise ValueError("Chunk sizes do not match.")
+        for other in results[1:]:
+            if not isinstance(other, InferenceResults):
+                raise TypeError("All inputs must be instances of InferenceResults.")
 
-        if self.metadata.max_seq_len != other.metadata.max_seq_len:
-            raise ValueError("Max sequence lengths do not match.")
+            # Check metadata compatibility
+            if base.metadata.model_name != other.metadata.model_name:
+                raise ValueError("Model names do not match.")
+            if base.metadata.chunk_size != other.metadata.chunk_size:
+                raise ValueError("Chunk sizes do not match.")
+            if base.metadata.max_seq_len != other.metadata.max_seq_len:
+                raise ValueError("Max sequence lengths do not match.")
 
-        new_metadata = self.metadata.copy() if hasattr(self.metadata, 'copy') else self.metadata
-        combined = InferenceResults(metadata=new_metadata)
+        # Create combined result
+        merged = InferenceResults(metadata=base.metadata.copy())
 
-        # Add self results
-        for read_id, result in self.items():
-            combined._add_result(result.copy(new_back_reference=combined))
+        for result in results:
+            for read_id, read_result in result.items():
+                if read_id in merged:
+                    logger.warning(f"Duplicate read_id '{read_id}' skipped during merge.")
+                    continue
+                merged._add_result(read_result.copy())
 
-        # Add other's results
-        for read_id, result in other.items():
-            if read_id in combined:
-                print(f"[Warning] Duplicate read_id '{read_id}' skipped.")
-                continue
-            combined._add_result(result.copy(new_back_reference=combined))
+        return merged
 
-        return combined
 
     def __repr__(self) -> str:
         return f"InferenceResults(num_reads={len(self)}, metadata={self.metadata})"
