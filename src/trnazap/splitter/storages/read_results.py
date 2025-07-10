@@ -151,6 +151,19 @@ class ReadResult:
             return (indices[0].item(), indices[-1].item())
         return (-1, -1)
 
+
+    # ------------------------------------------------------------------------
+    # Utilities
+    # ------------------------------------------------------------------------
+
+    def copy(self, new_back_reference: Optional["InferenceResults"] = None) -> "ReadResult":
+        return ReadResult(
+            read_id=self.read_id,
+            _logits={k: v.copy() for k, v in self._logits.items()},
+            num_chunks=self.num_chunks,
+            _back_reference=new_back_reference
+        )
+
     # ------------------------------------------------------------------------
     # String representation
     # ------------------------------------------------------------------------

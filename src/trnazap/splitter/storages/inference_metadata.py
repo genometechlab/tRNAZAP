@@ -36,6 +36,26 @@ class InferenceMetadata:
     
     def __repr__(self) -> str:
         return (f"InferenceMetadata(chunk_size={self.chunk_size}, "
-                f"model_type='{self.model_type}', "
-                f"device='{self.device}', "
+                f"model_name='{self.model_type}', "
+                f"chunk_size='{self.chunk_size}', "
                 f"num_reads={self.num_reads_processed})")
+
+    def copy(self) -> 'InferenceMetadata':
+        """Return a deep copy of the metadata."""
+        return InferenceMetadata(
+            chunk_size=self.chunk_size,
+            max_seq_len=self.max_seq_len,
+            model_type=self.model_type,
+            model_name=self.model_name,
+            num_classes=self.num_classes,
+            num_classes_seq2seq=self.num_classes_seq2seq,
+            label_names=self.label_names.copy() if self.label_names else None,
+            batch_size=self.batch_size,
+            device=self.device,
+            float_dtype=self.float_dtype,
+            timestamp=self.timestamp,
+            model_checkpoint=self.model_checkpoint,
+            pod5_paths=list(self.pod5_paths) if self.pod5_paths else None,
+            num_reads_processed=self.num_reads_processed,
+            total_inference_time=self.total_inference_time
+        )
