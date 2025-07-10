@@ -8,7 +8,7 @@ import argparse
 import sys
 from multiprocessing import Pool
 
-from Supporting_Functions.supporting_functions import (
+from supporting_functions.supporting_functions import (
     load_inference_obj,
     make_parameter_list,
     make_sub_bam,

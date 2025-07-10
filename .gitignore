@@ -48,3 +48,5 @@ Thumbs.db
 
 # Experimental folders
 **ecoli_bio**
+
+__pycache__/
