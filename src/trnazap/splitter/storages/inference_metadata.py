@@ -2,7 +2,7 @@
 Metadata class for storing inference configuration and settings.
 """
 from dataclasses import dataclass, field
-from typing import Optional, List
+from typing import Optional, List, Set
 from datetime import datetime
 from pathlib import Path
 
@@ -30,15 +30,14 @@ class InferenceMetadata:
     # Run information
     timestamp: str = field(default_factory=lambda: datetime.now().isoformat())
     model_checkpoint: Optional[str] = None
-    pod5_paths: Optional[List[Path]] = None
+    pod5_paths: Optional[List[str]] = None
     num_reads_processed: int = 0
     total_inference_time: Optional[float] = None
     
     def __repr__(self) -> str:
-        return (f"InferenceMetadata(chunk_size={self.chunk_size}, "
-                f"model_name='{self.model_name}', "
-                f"chunk_size='{self.chunk_size}', "
-                f"num_reads={self.num_reads_processed})")
+        return (f"InferenceMetadata(model_name='{self.model_name}', "
+                f"num_reads={self.num_reads_processed})"
+                f"chunk_size='{self.chunk_size}', ")
 
     def copy(self) -> 'InferenceMetadata':
         """Return a deep copy of the metadata."""
