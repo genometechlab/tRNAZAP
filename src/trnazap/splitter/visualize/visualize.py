@@ -87,7 +87,7 @@ class ResultsVisualizer:
                     "Please specify pod5_paths manually."
                 )
 
-            meta_paths = [Path(p) for p in (meta_paths if isinstance(meta_paths, (list, tuple)) else [meta_paths])]
+            meta_paths = [Path(p) for p in (meta_paths if isinstance(meta_paths, (list, tuple, set)) else [meta_paths])]
             if all(p.exists() for p in meta_paths):
                 self._pod5_paths = meta_paths
             else:
