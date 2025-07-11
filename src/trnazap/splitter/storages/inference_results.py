@@ -8,8 +8,13 @@ import pickle
 import numpy as np
 import logging
 
+import h5py
+import json
+
 from .read_results import ReadResult
 from .inference_metadata import InferenceMetadata
+from ..io import MultiLoadMixin
+from ..utils import PathSet
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +22,7 @@ logger = logging.getLogger(__name__)
 # InferenceResults Container
 # =============================================================================
 
-class InferenceResults:
+class InferenceResults(MultiLoadMixin):
     """Container for all inference results with metadata."""
 
     # -------------------------------------------------------------------------
@@ -128,79 +133,48 @@ class InferenceResults:
         return list(self._results.keys())
 
     # -------------------------------------------------------------------------
-    # I/O
+    # I/O Methods
     # -------------------------------------------------------------------------
-
-    def save(self, path: Union[str, Path]) -> None:
-        """
-        Save results to pickle file.
-
-        Args:
-            path: Output file path
-        """
-        path = Path(path)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, 'wb') as f:
-            pickle.dump(self, f)
-
+    
+    def _to_parquet_records(self) -> Tuple[List[Dict], Dict[str, Any]]:
+        """Convert to records for Parquet storage."""
+        from dataclasses import asdict
+        
+        records = []
+        for read_id, result in self._results.items():
+            result_records, _ = result._to_parquet_records()
+            records.extend(result_records)
+        
+        metadata_dict = asdict(self.metadata)
+        if metadata_dict.get('pod5_paths') is not None:
+            metadata_dict['pod5_paths'] = list(metadata_dict['pod5_paths'])
+        
+        metadata = {
+            'inference_metadata': metadata_dict,
+            'format_version': '2.0',
+            'num_results': len(self._results)
+        }
+        
+        return records, metadata
+    
     @classmethod
-    def load(cls, paths: Union[str, Path, List[Union[str, Path]]]) -> "InferenceResults":
-        """
-        Load one or more InferenceResults from pickle file(s).
-
-        Args:
-            paths: Path or list of paths to .pkl files.
-
-        Returns:
-            A single (merged if needed) InferenceResults instance.
-        """
-        if isinstance(paths, (str, Path)):
-            paths = [paths]
-
-        loaded_results = []
-
-        for path in paths:
-            path = Path(path)
-            if not path.exists():
-                raise FileNotFoundError(f"File not found: {path}")
-            
-            with open(path, 'rb') as f:
-                result = pickle.load(f)
-            
-            if not isinstance(result, cls):
-                raise TypeError(f"File '{path}' does not contain an InferenceResults object.")
-
-            loaded_results.append(result)
-
-        if len(loaded_results) == 1:
-            return loaded_results[0]
-        elif len(loaded_results)>1:
-            return cls.merge(*loaded_results)
-        else:
-            raise ValueError(f"No Path is provided")
-
-
+    def _from_parquet_records(cls, records: List[Dict], metadata: Dict[str, Any]) -> "InferenceResults":
+        """Reconstruct from Parquet records."""
+        metadata_dict = metadata['inference_metadata']
+        if metadata_dict.get('pod5_paths') is not None:
+            metadata_dict['pod5_paths'] = list(metadata_dict['pod5_paths'])
+        
+        inference_metadata = InferenceMetadata(**metadata_dict)
+        result = cls(metadata=inference_metadata)
+        
+        for record in records:
+            read_result = ReadResult._from_parquet_records([record], {})
+            result._add_result(read_result)
+        
+        return result
 
     # -------------------------------------------------------------------------
     # Utility
-    # -------------------------------------------------------------------------
-
-    def summary(self) -> Dict[str, Any]:
-        """
-        Get summary of results.
-
-        Returns:
-            Dictionary with summary statistics
-        """
-        return {
-            'num_reads': len(self),
-            'chunk_size': self.metadata.chunk_size,
-            'model_name': self.metadata.model_name,
-            'inference_time': self.metadata.total_inference_time,
-        }
-
-    # -------------------------------------------------------------------------
-    # Dunder Methods
     # -------------------------------------------------------------------------
 
     @classmethod
@@ -237,16 +211,40 @@ class InferenceResults:
 
         # Create combined result
         merged = InferenceResults(metadata=base.metadata.copy())
+        merged_pod5_pths = PathSet()
 
         for result in results:
+            merged_pod5_pths = merged_pod5_pths + PathSet.from_list(result.metadata.pod5_paths)
             for read_id, read_result in result.items():
                 if read_id in merged:
                     logger.warning(f"Duplicate read_id '{read_id}' skipped during merge.")
                     continue
                 merged._add_result(read_result.copy())
 
-        return merged
+        merged.metadata.pod5_paths = merged_pod5_pths.to_list()
 
+        return merged
+    
+    def __add__(self, other: "InferenceResults"):
+        return self.merge(self, other)
+
+    def summary(self) -> Dict[str, Any]:
+        """
+        Get summary of results.
+
+        Returns:
+            Dictionary with summary statistics
+        """
+        return {
+            'num_reads': len(self),
+            'chunk_size': self.metadata.chunk_size,
+            'model_name': self.metadata.model_name,
+            'inference_time': self.metadata.total_inference_time,
+        }
+
+    # -------------------------------------------------------------------------
+    # Dunder Methods
+    # -------------------------------------------------------------------------
 
     def __repr__(self) -> str:
         return f"InferenceResults(num_reads={len(self)}, metadata={self.metadata})"
