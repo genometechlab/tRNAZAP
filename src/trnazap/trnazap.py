@@ -8,15 +8,18 @@ import argparse
 import sys
 from multiprocessing import Pool
 
-from supporting_functions.supporting_functions import (
-    load_inference_obj,
+from in
+
+from aligner.supporting_functions.supporting_functions import (
     make_parameter_list,
     make_sub_bam,
     process_ref,
     split_read_ids,
 )
 
-program_name = "trnazap"
+from aligner.inference_functions.process_inference import load_inference_obj
+
+program_name = "tRNA_zap"
 version = "05_16_25_v0.1.2"
 
 
@@ -79,7 +82,7 @@ def main(
     # Inference dict includes information for each read about the highest probablity
     # class, the indicies for tRNA in signal space, and if this is a training or
     # validation dataset it adds a ground truth label ('gt').
-    inference_dict = load_inference_obj(inference_list, ref_dict)
+    inference_dict = load_inference_obj(inference_list)
 
     splt_reads = split_read_ids(unaligned_bam, threads)
 

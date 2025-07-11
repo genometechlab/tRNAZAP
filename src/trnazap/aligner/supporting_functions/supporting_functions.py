@@ -278,8 +278,8 @@ def make_sub_bam(args_list):
 
             # Extract the predicted reference sequence information
             # The inference model tells us which tRNA reference this read best matches
-            assigned_ref = inference_dict[read.query_name]["pred"]
-            assigned_ref_sequence = ref_dict[inference_dict[read.query_name]["pred"]][
+            assigned_ref = inference_dict[read.query_name].classification_pred
+            assigned_ref_sequence = ref_dict[assigned_ref][
                 "reference_seq"
             ]
 
@@ -342,38 +342,6 @@ def make_sub_bam(args_list):
                         # Write the successfully aligned and validated read
                         # To the output BAM
                         outf.write(aligned_read)
-
-            else:
-                if "gt" in inference_dict[read.query_name]:
-                    assigned_ref = inference_dict[read.query_name]["gt"]
-                    assigned_ref_sequence = ref_dict[
-                        inference_dict[read.query_name]["gt"]
-                    ]["reference_seq"]
-
-                    aligned_read = align_read(
-                        read,
-                        inference_dict[read.query_name],
-                        assigned_ref,
-                        assigned_ref_sequence,
-                        secondary=True,
-                    )
-
-                    # Handle unmapped reads - ignore them
-                    # These are reads where the alignment algorithm
-                    # Couldn't find a good match.
-                    # Generally caused by the signal segmenter
-                    # Producing too narrow of a window
-                    if aligned_read.is_unmapped:
-                        continue
-
-                    # Validate the cigar string <- remove for perfomance boost?
-                    _ = check_cigar(
-                        aligned_read.get_cigar_stats(), aligned_read.query_sequence
-                    )
-
-                    # Write the successfully aligned and validated read
-                    # to the output BAM
-                    outf.write(aligned_read)
 
     # Return the output path for potential chaining or confirmation
     return outpath

@@ -85,79 +85,7 @@ def calcuate_vertical_traversal(d):
             - ndarray: Array of vertical traversal distances
             for each position
     """
-    # Used AI to comment code below. Should be duplicate
-    """
-    # Keep track of where each position started
-    trav_mat = np.full((d.shape[0], d.shape[1]), -1)
-
-    # Array for tracking the vertical traversal distance
-    traversal_distance = np.full((d.shape[0]), d.shape[0]
-    + d.shape[1] + 1)
-
-    #Iterate through each vertical start location in the
-    #last column (possible alignment end points)
-    #and calculate what the start position was. Use
-    the trav_mat to short circuit pre-calculated values
-    for seed in list(range(d.shape[0]))[::-1]:
-        tmp_x, tmp_y = (seed, d.shape[1] - 1)
-        positions = [0] * (tmp_x + tmp_y)
-        positions[0] = (seed, -1)
-        position_tracker = 1
-        while tmp_y > 1:
-            deletion_score = d[tmp_x - 1, tmp_y] if
-            tmp_x >= 1 else np.inf
-            insertion_score = d[tmp_x, tmp_y - 1] if
-            tmp_y >= 1 else np.inf
-            sub_or_match_score = d[tmp_x - 1, tmp_y - 1]
-            if tmp_x >= 1 and tmp_y >= 1 else np.inf
-
-            if sub_or_match_score <= deletion_score and
-            sub_or_match_score <= insertion_score:
-                if trav_mat[tmp_x -1][tmp_y - 1] != -1:
-                    start = trav_mat[tmp_x - 1][tmp_y - 1]
-                    tmp_y = 1
-                else:
-                    positions[position_tracker] = (
-                    tmp_x - 1, tmp_y - 1)  # Substitution
-                    tmp_x -= 1
-                    tmp_y -= 1
-                    start = tmp_x
-                    position_tracker += 1
-
-            elif insertion_score <= deletion_score:
-                # In terms of transforming query to
-                #reference:
-                # Insertion into  query
-                if trav_mat[tmp_x][tmp_y - 1] != -1:
-                    start = trav_mat[tmp_x][tmp_y - 1]
-                    tmp_y = 1
-                else:
-                    positions[position_tracker] = (tmp_x,
-                    tmp_y - 1)  # Deletion
-                    tmp_y -= 1
-                    start = tmp_x
-                    position_tracker += 1
-
-            else:
-                # Deletion from query
-                if trav_mat[tmp_x - 1][tmp_y] != -1:
-                    start = trav_mat[tmp_x - 1][tmp_y]
-                    tmp_y = 1
-                else:
-                    positions[position_tracker] = (tmp_x -
-                    1, tmp_y)  # Insertion
-                    tmp_x -= 1
-                    start = tmp_x
-                    position_tracker += 1
-
-        for p in range(position_tracker):
-            trav_mat[positions[p]] = start
-
-        traversal_distance[seed] = abs(seed -
-        trav_mat[(seed, -1)])
-
-    return trav_mat, traversal_distance
-    """
+   
     # Initialization matrix to store the start position for each cell in traversal
     trav_mat = np.full((d.shape[0], d.shape[1]), -1)
 
@@ -321,43 +249,6 @@ def compute_edit_operations(s: str, t: str):
     # Initialize index for filling the array (from the end)
     idx = max_operations - 1
 
-    # Updated with AI generated comments:
-    """
-    # Trace back through the matrix
-    while n > 0:
-        deletion_score = d[m - 1, n] if m >= 1 else np.inf
-        insertion_score = d[m, n - 1] if n >= 1 else np.inf
-        sub_or_match_score = d[m - 1, n - 1] if m >= 1 and n >= 1 else np.inf
-
-        if (sub_or_match_score <= deletion_score and
-        sub_or_match_score <= insertion_score):
-            if d[m - 1, n - 1] < d[m, n]:
-                instr_array[idx] = ord('s')  # Substitution
-            else:
-                instr_array[idx] = ord('m')  # Match
-            m -= 1
-            n -= 1
-        elif insertion_score <= deletion_score:
-            # In terms of transforming query to reference:
-            # Insertion into  query
-            instr_array[idx] = ord('d')  # Deletion
-            n -= 1
-        else:
-            # Deletion from query
-            instr_array[idx] = ord('i')  # Insertion
-            m -= 1
-
-        idx -= 1
-    #if d[m, n] == 1:
-    #    instr_array[idx] = ord('s')
-    #    idx -= 1
-    #else:
-    #    instr_array[idx] = ord('m')
-    #    idx -= 1
-
-    # Return only the relevant portion of the array
-    return instr_array[idx+1:], start, stop
-    """
     # Trace back through the matrix
     while n > 0:
         # For each position, evaluate all three possible previous moves
@@ -686,53 +577,19 @@ def align_read(
     Returns:
         pysam.AlignedSegment: New BAM record with alignment information
     """
-    # AI Comments:
-    """
-    a = pysam.AlignedSegment()
-    if inference_dict_read['trna_indices'] == (-1, -1):
-        return pysam_read
-    sub_sequence, three_slice, five_slice =
-    (subset_sequence(pysam_read,
-    inference_dict_read['trna_indices'])
-    if len(sub_sequence) == 0:
-        return pysam_read
-
-    a.query_name = pysam_read.query_name
-    a.query_sequence = pysam_read.query_sequence
-    a.query_qualities = pysam_read.query_qualities
-    a.reference_id = ref_index
-    a.flag = 0
-    a.tags = pysam_read.get_tags()
-
-    (edit_instruction_list,
-     start,
-     stop) = edit_instructions(sub_sequence,
-                               ref_sequence)
-
-    a.reference_start = 0
-    a.mapping_quality = 60
-
-    a.cigar, edit_dist =
-cigar_tuples_from_edit_instrucitons(edit_instruction_list,
-query_start=max(0, start-1), five_clip=five_slice,
-query_end=len(sub_sequence) - stop,
-three_clip=max(0,three_slice))
-
-    a.set_tag('ED', edit_dist)
-    return a
-    """
+   
     # Create a new empty alignment segment to store our results
     a = pysam.AlignedSegment()
 
     # Check if valid tRNA indices were identified by the inference model
     # If not (-1, -1), return the original read without any changes
-    if inference_dict_read["trna_indices"] == (-1, -1):
+    if inference_dict_read.variable_region_range == (-1, -1):
         return pysam_read
 
     # Extract just the tRNA portion of the sequence using the predicted indices
     # Also get the lengths of unaligned regions (for soft clipping)
     sub_sequence, three_slice, five_slice = subset_sequence(
-        pysam_read, inference_dict_read["trna_indices"]
+        pysam_read, inference_dict_read.variable_region_range
     )
 
     # If no valid tRNA sequence could be extracted, return the original read
