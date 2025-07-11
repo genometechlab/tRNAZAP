@@ -17,6 +17,7 @@ import tqdm
 from ..config.model_config import ModelConfig, ModelLoader
 from ..feeders import SequenceStandardizer, load_signal, collate_fn
 from ..storages import InferenceResults, InferenceMetadata
+from ..utils import PathSet
 
 
 logger = logging.getLogger(__name__)
@@ -50,7 +51,7 @@ class Inference:
     # ---------- public API ---------------------------------------------------
     def predict(
         self,
-        pod5_paths: Union[str, Path],
+        pod5_paths: Union[PathLike, PathLikeList],
         read_ids: Optional[List[str]] = None,
         batch_size: int = 32,
         save_path: Optional[Union[str, Path]] = None,
@@ -68,9 +69,9 @@ class Inference:
         show_progress : show tqdm progress bars
         """
         start = time.time()
-        pod5_paths = self._normalize_to_path_list(pod5_paths)
+        pod5_pathset: PathSet = self._resolve_paths(pod5_paths)
 
-        metadata = self._build_metadata(pod5_paths, batch_size)
+        metadata = self._build_metadata(pod5_pathset, batch_size)
         results = InferenceResults(metadata=metadata)
 
         # queue holds *individual* pre-processed read dicts
@@ -82,7 +83,7 @@ class Inference:
         producer = threading.Thread(
             target=self._producer_worker,
             kwargs=dict(
-                pod5_paths=pod5_paths,
+                pod5_paths=pod5_pathset.paths,
                 read_ids=read_ids,
                 sample_queue=sample_queue,
                 show_progress=show_progress,
@@ -234,16 +235,15 @@ class Inference:
             return ModelConfig.from_dict(cfg)
         raise TypeError("config must be ModelConfig | str | dict")
     
-    def _normalize_to_path_list(self, paths: PathLikeList) -> List[Path]:
+    def _resolve_paths(self, paths: PathLikeList) -> List[Path]:
         if isinstance(paths, (str, Path)):
-            return [Path(paths)]
+            return PathSet([paths])
         elif isinstance(paths, list):
-            return [Path(p) for p in paths]
+            return PathSet(paths)
         else:
             raise TypeError(f"Expected str, Path, or list of them, got {type(paths).__name__}")
 
-
-    def _build_metadata(self, pod5_path: Path, batch_size: int) -> InferenceMetadata:
+    def _build_metadata(self, pod5_pathset: PathSet, batch_size: int) -> InferenceMetadata:
         return InferenceMetadata(
             chunk_size=self.config.chunk_size,
             max_seq_len=self.config.max_seq_len,
@@ -256,7 +256,7 @@ class Inference:
             device=str(self.device),
             float_dtype=self.config.float_dtype,
             model_checkpoint=str(getattr(self.config, "checkpoint_path", None)),
-            pod5_paths=pod5_path,
+            pod5_paths=pod5_pathset.to_list(),
         )
 
     # ---------- context manager --------------------------------------------
