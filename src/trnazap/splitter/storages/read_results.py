@@ -6,10 +6,11 @@ import torch
 import numpy as np
 import pickle
 from pathlib import Path
-from typing import Union, Optional, Dict, TYPE_CHECKING
+from typing import Union, Optional, Dict, List, Tuple, Any, TYPE_CHECKING
 from dataclasses import dataclass
 import logging
 
+from ..io import SaveLoadMixin
 
 if TYPE_CHECKING:
     from .inference_results import InferenceResults
@@ -18,13 +19,22 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 @dataclass
-class ReadResult:
+class ReadResult(SaveLoadMixin):
     """Results for a single read."""
 
     read_id: str
     _logits: Dict[str, np.ndarray]  # e.g., {'seq2seq': array, 'seq_class': array}
     num_chunks: int
     chunk_size: int
+
+    def __post_init__(self):
+        """Validate logits shapes."""
+        if self.seq2seq_logits is not None:
+            if self.seq2seq_logits.ndim != 2:
+                raise ValueError(f"seq2seq_logits must be 2D, got shape {self.seq2seq_logits.shape}")
+        if self.classification_logits is not None:
+            if self.classification_logits.ndim != 1:
+                raise ValueError(f"classification_logits must be 1D, got shape {self.classification_logits.shape}")
 
     # ------------------------------------------------------------------------
     # Internal raw logits
@@ -50,7 +60,7 @@ class ReadResult:
     # ------------------------------------------------------------------------
 
     @property
-    def probs(self) -> Dict[str, np.ndarray]:
+    def probs(self) -> Dict[str, Optional[np.ndarray]]:
         """Get probabilities for all tasks."""
         return {
             "seq_class": self.classification_probs,
@@ -88,14 +98,14 @@ class ReadResult:
     @property
     def seq2seq_preds(self) -> Optional[np.ndarray]:
         """Get seq2seq predictions as indices."""
-        if self.seq2seq_probs is not None:
+        if self.seq2seq_logits is not None:
             return np.argmax(self.seq2seq_logits, axis=-1)
         return None
 
     @property
     def classification_pred(self) -> Optional[int]:
         """Get classification prediction (argmax index)."""
-        if self.classification_probs is not None:
+        if self.classification_logits is not None:
             return int(np.argmax(self.classification_logits))
         return None
 
@@ -147,32 +157,52 @@ class ReadResult:
             read_id=self.read_id,
             _logits={k: v.copy() for k, v in self._logits.items()},
             num_chunks=self.num_chunks,
+            chunk_size=self.chunk_size
         )
     
     # ------------------------------------------------------------------------
     # I/O
     # ------------------------------------------------------------------------
-
-
-    def save(self, path: Union[str, Path]) -> None:
-        """
-        Save results to pickle file.
-
-        Args:
-            path: Output file path
-        """
-        path = Path(path)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, 'wb') as f:
-            pickle.dump(self, f)
-
+    
+    def _to_parquet_records(self) -> Tuple[List[Dict], Dict[str, Any]]:
+        """Convert to records for Parquet storage."""
+        import numpy as np
+        
+        seq2seq_flat = self.seq2seq_logits.flatten() if self.seq2seq_logits is not None else np.array([])
+        classification_flat = self.classification_logits.flatten() if self.classification_logits is not None else np.array([])
+        
+        record = {
+            'read_id': self.read_id,
+            'seq2seq_flat': seq2seq_flat,
+            'seq2seq_shape': list(self.seq2seq_logits.shape) if self.seq2seq_logits is not None else [],
+            'classification_flat': classification_flat,
+            'classification_shape': list(self.classification_logits.shape) if self.classification_logits is not None else [],
+            'num_chunks': self.num_chunks,
+            'chunk_size': self.chunk_size
+        }
+        
+        metadata = {'format_version': '1.0'}
+        return [record], metadata
     
     @classmethod
-    def load(self, path: Union[str, Path]) -> "ReadResult":
-        with open(path, 'rb') as f:
-            result = pickle.load(f)
-        return result
-
+    def _from_parquet_records(cls, records: List[Dict], metadata: Dict[str, Any]) -> "ReadResult":
+        """Reconstruct from Parquet records."""
+        import numpy as np
+        
+        record = records[0]
+        logits = {}
+        
+        if record['seq2seq_shape']:
+            logits['seq2seq'] = np.array(record['seq2seq_flat']).reshape(record['seq2seq_shape'])
+        if record['classification_shape']:
+            logits['seq_class'] = np.array(record['classification_flat']).reshape(record['classification_shape'])
+        
+        return cls(
+            read_id=record['read_id'],
+            _logits=logits,
+            num_chunks=record['num_chunks'],
+            chunk_size=record['chunk_size']
+        )
 
     # ------------------------------------------------------------------------
     # String representation
