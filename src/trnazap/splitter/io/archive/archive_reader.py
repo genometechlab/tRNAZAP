@@ -5,7 +5,7 @@ import struct
 import json
 import zstandard as zstd
 from pathlib import Path
-from typing import Optional, Iterator, Dict, Any, TYPE_CHECKING
+from typing import Optional, Iterator, Dict, Any, TYPE_CHECKING, List, Union
 import numpy as np
 import logging
 
@@ -21,30 +21,129 @@ logger = logging.getLogger(__name__)
 
 
 class ZIRReader:
-    """Read inference results from ZIR archive format."""
+    """Read inference results from ZIR archive format(s)."""
     
-    def __init__(self, path: Path, index=False):
+    def __init__(self, path: Union[Path, List[Path]], index=False):
         """
         Initialize reader.
         
         Args:
-            path: Archive file path
+            path: Archive file path or list of paths
+            index: Whether to build index on initialization
         """
-        self.path = Path(path)
-        self.file = open(self.path, 'rb')
+
+        if isinstance(path, (str, Path)):
+            paths = [Path(path)]
+        else:
+            paths = [Path(p) for p in path]
+
+        final_paths = []
+        for p in paths:
+            p = Path(p)  # Ensure it's a Path object
+            if p.is_dir():
+                # Use Path.glob instead of glob.glob for consistency
+                zir_files = sorted(p.glob("*.zir"))  # Sort for reproducibility
+                if not zir_files:
+                    logger.warning(f"No .zir files found in directory: {p}")
+                final_paths.extend(zir_files)
+            elif p.exists():
+                final_paths.append(p)
+            else:
+                raise FileNotFoundError(f"Path does not exist: {p}")
+
+        if not final_paths:
+            raise ValueError("No valid .zir files found")
+
+        self.paths = final_paths
+        self.is_multi = len(self.paths) > 1
+
+        
+        self.files = []
+        metadata_dicts = []
+        self.record_counts = []
+        self.record_count = 0
+        
+        for p in self.paths:
+            file = open(p, 'rb')
+            self.files.append(file)
+
+            metadata_dict, record_count = self._read_header_from_file(file)
+            metadata_dicts.append(metadata_dict)
+            self.record_counts.append(record_count)
+            self.record_count += record_count
+        
+        # Check metadata compatibility for multiple files
+        if len(metadata_dicts) > 1:
+            self._check_metadata_compatibility(metadata_dicts)
+        
+        self.metadata_dict = metadata_dicts[0]
+
         self.decompressor = zstd.ZstdDecompressor()
         
-        # Read and validate header
-        self._read_header()
-        
-        # Index will be built on demand
         self._index = None
-        self._current_pos = HEADER_SIZE  # Position after header
-
+        self._current_file_idx = 0
+        
         # Build index if demanded
         if index:
             self.build_index()
+
+    def _check_metadata_compatibility(self, metadata_dicts):
+        """Check if all files have compatible metadata."""
+        first_metadata = metadata_dicts[0]
         
+        # Critical fields that must match
+        critical_fields = [
+            'model_name',
+            'model_type', 
+            'chunk_size',
+            'num_classes',
+            'num_classes_seq2seq',
+            'max_seq_len'
+        ]
+        
+        for i, metadata in enumerate(metadata_dicts[1:], 1):
+            for field in critical_fields:
+                first_value = first_metadata.get(field)
+                current_value = metadata.get(field)
+                
+                if first_value != current_value:
+                    for f in self.files:
+                        f.close()
+                    
+                    raise ValueError(
+                        f"Incompatible metadata in file {self.paths[i]}: "
+                        f"{field} mismatch - expected '{first_value}' but got '{current_value}'. "
+                        f"All archives must be from the same model."
+                    )
+        
+        warning_fields = ['batch_size', 'device', 'float_dtype']
+        for field in warning_fields:
+            values = [m.get(field) for m in metadata_dicts]
+            if len(set(values)) > 1:
+                logger.warning(f"Different {field} values across archives: {values}")
+    
+    def _read_header_from_file(self, file) -> tuple[dict, int]:
+        """Read header from a specific file."""
+        
+        magic = file.read(len(MAGIC_BYTES))
+        if magic != MAGIC_BYTES:
+            raise ValueError(f"Invalid file format. Expected {MAGIC_BYTES}, got {magic}")
+        
+        version = struct.unpack('<I', file.read(4))[0]
+        if version != FORMAT_VERSION:
+            raise ValueError(f"Unsupported version {version}. Expected {FORMAT_VERSION}")
+        
+        
+        record_count = struct.unpack('<I', file.read(4))[0]
+        
+        metadata_length = struct.unpack('<I', file.read(4))[0]
+        metadata_json = file.read(metadata_length).decode('utf-8')
+        metadata_dict = json.loads(metadata_json)
+        
+        file.seek(HEADER_SIZE)
+        
+        return metadata_dict, record_count
+    
     def __enter__(self):
         return self
         
@@ -52,62 +151,40 @@ class ZIRReader:
         self.close()
         
     def close(self):
-        """Close the file."""
-        if self.file:
-            self.file.close()
-            self.file = None
+        """Close the file(s)."""
+        for file in self.files:
+            if file:
+                file.close()
+        self.files = []
             
-    def _read_header(self):
-        """Read and validate file header."""
-        # Check magic bytes
-        magic = self.file.read(len(MAGIC_BYTES))
-        if magic != MAGIC_BYTES:
-            raise ValueError(f"Invalid file format. Expected {MAGIC_BYTES}, got {magic}")
-        
-        # Check version
-        version = struct.unpack('<I', self.file.read(4))[0]
-        if version != FORMAT_VERSION:
-            raise ValueError(f"Unsupported version {version}. Expected {FORMAT_VERSION}")
-        
-        # Read record count
-        self.record_count = struct.unpack('<I', self.file.read(4))[0]
-        
-        # Read metadata
-        metadata_length = struct.unpack('<I', self.file.read(4))[0]
-        metadata_json = self.file.read(metadata_length).decode('utf-8')
-        self.metadata_dict = json.loads(metadata_json)
-        
-        # Skip to end of header
-        self.file.seek(HEADER_SIZE)
-    
     def __len__(self):
         """Get number of records."""
         return self.record_count
     
-    # =============================================================================
-    # InferenceResults Container
-    # =============================================================================
-    
     def __iter__(self) -> Iterator['ReadResult']:
         """Iterate through all records sequentially."""
-        self.file.seek(HEADER_SIZE)  # Reset to start of data
-        
-        for _ in range(self.record_count):
-            yield self._read_next_record()
+        for file_idx, (file, record_count) in enumerate(zip(self.files, self.record_counts)):
+            self._current_file_idx = file_idx
+            file.seek(HEADER_SIZE)
+            
+            for _ in range(record_count):
+                yield self._read_next_record_from_file(file_idx)
 
-    def _read_next_record(self) -> 'ReadResult':
-        """Read the next record from current file position."""
-        # Read and verify record marker
-        marker = self.file.read(len(RECORD_MARKER))
+    def _read_next_record_from_file(self, file_idx: int) -> 'ReadResult':
+        """Read the next record from specific file."""
+        file = self.files[file_idx]
+        
+        # Read and verify record marke
+        marker = file.read(len(RECORD_MARKER))
         if marker != RECORD_MARKER:
-            raise ValueError(f"Invalid record marker at position {self.file.tell()}")
+            raise ValueError(f"Invalid record marker at position {file.tell()}")
         
         # Read sizes
-        compressed_size = struct.unpack('<I', self.file.read(4))[0]
-        uncompressed_size = struct.unpack('<I', self.file.read(4))[0]
+        compressed_size = struct.unpack('<I', file.read(4))[0]
+        uncompressed_size = struct.unpack('<I', file.read(4))[0]
         
         # Read and decompress data
-        compressed_data = self.file.read(compressed_size)
+        compressed_data = file.read(compressed_size)
         data = self.decompressor.decompress(compressed_data)
         
         if len(data) != uncompressed_size:
@@ -160,9 +237,9 @@ class ZIRReader:
             chunk_size=chunk_size
         )
     
-    # =============================================================================
-    # Indexed accessed
-    # =============================================================================
+    def _read_next_record(self) -> 'ReadResult':
+        """Read the next record - for single file compatibility."""
+        return self._read_next_record_from_file(0)
     
     def build_index(self):
         """Build index for random access. Scans entire file once."""
@@ -170,37 +247,42 @@ class ZIRReader:
             logger.info("Index already built")
             return
         
-        self._index = {}
-        self.file.seek(HEADER_SIZE)
+        self._index = {}  # read_id -> (file_idx, offset, size)
         
-        for i in range(self.record_count):
-            # Remember position before record
-            pos = self.file.tell()
+        for file_idx, (file, record_count) in enumerate(
+            zip(self.files, self.record_counts)
+        ):
+            file.seek(HEADER_SIZE)
             
-            # Read record marker
-            marker = self.file.read(len(RECORD_MARKER))
-            if marker != RECORD_MARKER:
-                raise ValueError(f"Invalid record marker at position {pos}")
-            
-            # Read sizes
-            compressed_size = struct.unpack('<I', self.file.read(4))[0]
-            uncompressed_size = struct.unpack('<I', self.file.read(4))[0]
-            
-            # Read compressed data to get read_id
-            compressed_data = self.file.read(compressed_size)
-            
-            # We need to decompress just enough to get the read_id
-            data = self.decompressor.decompress(compressed_data)
-            
-            # Extract read_id
-            read_id_len = struct.unpack_from('<H', data, 0)[0]
-            read_id = data[2:2 + read_id_len].decode('utf-8')
-            
-            # Store position and size in index
-            self._index[read_id] = {
-                'offset': pos,
-                'record_size': len(RECORD_MARKER) + 4 + 4 + compressed_size
-            }
+            for i in range(record_count):
+                # Remember position before record
+                pos = file.tell()
+                
+                # Read record marker
+                marker = file.read(len(RECORD_MARKER))
+                if marker != RECORD_MARKER:
+                    raise ValueError(f"Invalid record marker at position {pos}")
+                
+                # Read sizes
+                compressed_size = struct.unpack('<I', file.read(4))[0]
+                uncompressed_size = struct.unpack('<I', file.read(4))[0]
+                
+                # Read compressed data to get read_id
+                compressed_data = file.read(compressed_size)
+                
+                # We need to decompress just enough to get the read_id
+                data = self.decompressor.decompress(compressed_data)
+                
+                # Extract read_id
+                read_id_len = struct.unpack_from('<H', data, 0)[0]
+                read_id = data[2:2 + read_id_len].decode('utf-8')
+                
+                # Store position and size in index with file index
+                self._index[read_id] = {
+                    'file_idx': file_idx,
+                    'offset': pos,
+                    'record_size': len(RECORD_MARKER) + 4 + 4 + compressed_size
+                }
     
     def get_read(self, read_id: str) -> 'ReadResult':
         """Get specific result by read_id. Builds index on first use."""
@@ -210,12 +292,27 @@ class ZIRReader:
         if read_id not in self._index:
             raise KeyError(f"Read ID '{read_id}' not found in archive")
         
-        # Seek to record position
+        # Get file and position
         record_info = self._index[read_id]
-        self.file.seek(record_info['offset'])
+        file_idx = record_info['file_idx']
+        file = self.files[file_idx]
+        
+        # Seek to record position
+        file.seek(record_info['offset'])
         
         # Read the record
-        return self._read_next_record()
+        return self._read_next_record_from_file(file_idx)
+    
+    def get_path(self, read_id: str) -> Path:
+        """Get the path of the archive containing this read_id."""
+        if self._index is None:
+            self.build_index()
+        
+        if read_id not in self._index:
+            raise KeyError(f"Read ID '{read_id}' not found in any archive")
+        
+        file_idx = self._index[read_id]['file_idx']
+        return self.paths[file_idx]
     
     def __contains__(self, read_id: str) -> bool:
         """Check if read_id exists in archive."""
@@ -260,12 +357,22 @@ class ZIRReader:
     
     def summary(self) -> dict:
         """Get archive summary information."""
-        return {
-            'path': str(self.path),
-            'format_version': FORMAT_VERSION,
-            'record_count': self.record_count,
-            'model_name': self.metadata_dict.get('model_name'),
-            'chunk_size': self.metadata_dict.get('chunk_size'),
-            'indexed': self._index is not None,
-            'index_size': len(self._index) if self._index else 0
-        }
+        if self.is_multi:
+            return {
+                'num_archives': len(self.paths),
+                'paths': [str(p) for p in self.paths],
+                'total_record_count': self.record_count,
+                'record_counts_per_file': self.record_counts,
+                'indexed': self._index is not None,
+                'index_size': len(self._index) if self._index else 0
+            }
+        else:
+            return {
+                'path': str(self.paths[0]),
+                'format_version': FORMAT_VERSION,
+                'record_count': self.record_count,
+                'model_name': self.metadata_dict.get('model_name'),
+                'chunk_size': self.metadata_dict.get('chunk_size'),
+                'indexed': self._index is not None,
+                'index_size': len(self._index) if self._index else 0
+            }
