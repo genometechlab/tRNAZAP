@@ -1,1 +1,5 @@
-from trnazap.splitter import Inference, ResultsVisualizer, TransformerZAM_multitask
+from trnazap.splitter import (Inference, 
+                              ResultsVisualizer, 
+                              TransformerZAM_multitask, 
+                              ZIRWriter, 
+                              ZIRReader)
