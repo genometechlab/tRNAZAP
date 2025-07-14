@@ -1,6 +1,5 @@
 """Module for processing tRNA model inference output."""
-
-from trna_zap.splitter import InferenceResults
+from splitter.storages.inference_results import InferenceResults
 
 def load_inference_obj(inference_path_list):
     """
@@ -14,7 +13,6 @@ def load_inference_obj(inference_path_list):
 
     return: A dictionary for each read in the dataset.
     """
-    
     #For now just load one inference_object
     inference_obj = InferenceResults.load(inference_path_list)
     return inference_obj

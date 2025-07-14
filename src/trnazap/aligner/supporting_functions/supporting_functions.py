@@ -9,8 +9,7 @@ import subprocess
 
 import pysam
 
-from alignment_functions import align_read
-from tRNAzap.Inference
+from aligner.alignment_functions.alignment import align_read
 
 from pathlib import Path
 
