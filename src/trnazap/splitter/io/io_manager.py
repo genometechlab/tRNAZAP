@@ -4,7 +4,7 @@ from pathlib import Path
 import logging
 
 from .io_config import FileFormat, FormatConfig
-from .io_handler import IOHandler, ParquetHandler, PickleHandler
+from .io_handler import IOHandler, ParquetHandler, PickleHandler, ZIRHandler
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +26,8 @@ class IOManager:
         """Initialize with default handlers."""
         self._handlers = {
             FileFormat.PARQUET: ParquetHandler(),
-            FileFormat.PICKLE: PickleHandler()
+            FileFormat.PICKLE: PickleHandler(),
+            FileFormat.ZIR: ZIRHandler()  # Add ZIR handler
         }
     
     def register_handler(self, format: FileFormat, handler: IOHandler) -> None:

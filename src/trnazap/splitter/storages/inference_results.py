@@ -172,6 +172,22 @@ class InferenceResults(MultiLoadMixin):
             result._add_result(read_result)
         
         return result
+    
+    def _to_zir(self, path: Path) -> None:
+        """Internal method to save as ZIR archive."""
+        from ..io.archive import ZIRWriter
+        
+        with ZIRWriter(path, self.metadata) as writer:
+            for result in self.values():
+                writer.add_result(result)
+    
+    @classmethod
+    def _from_zir(cls, path: Path) -> "InferenceResults":
+        """Internal method to load from ZIR archive."""
+        from ..io.archive import ZIRReader
+        
+        with ZIRReader(path) as reader:
+            return reader.to_inference_results()
 
     # -------------------------------------------------------------------------
     # Utility

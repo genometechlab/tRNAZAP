@@ -5,6 +5,7 @@ from pathlib import Path
 import logging
 import pickle
 
+from .archive import ZIRWriter, ZIRReader
 logger = logging.getLogger(__name__)
 
 T = TypeVar('T')
@@ -114,3 +115,19 @@ class PickleHandler(IOHandler):
         if not isinstance(obj, cls):
             raise TypeError(f"Expected {cls.__name__}, got {type(obj).__name__}")
         return obj
+    
+
+class ZIRHandler(IOHandler):
+    """Handler for ZIR archive I/O operations."""
+    
+    def save(self, obj: Any, path: Path) -> None:
+        """Save to ZIR archive format."""
+        if not hasattr(obj, '_to_zir'):
+            raise TypeError(f"Type {type(obj).__name__} does not support ZIR format")
+        obj._to_zir(path)
+    
+    def load(self, path: Path, cls: Type[T]) -> T:
+        """Load from ZIR archive format."""
+        if not hasattr(cls, '_from_zir'):
+            raise TypeError(f"Type {cls.__name__} does not support ZIR format")
+        return cls._from_zir(path)

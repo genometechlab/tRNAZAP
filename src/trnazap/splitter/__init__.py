@@ -1,6 +1,7 @@
 from .inference import Inference
 from .config import ModelConfig, ModelLoader
 from .model import TransformerZAM_multitask
+from .io import ZIRReader, ZIRWriter
 
 # Results
 from .storages import InferenceResults, InferenceMetadata, ReadResult
