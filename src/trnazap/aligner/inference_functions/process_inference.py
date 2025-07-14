@@ -17,4 +17,4 @@ def load_inference_obj(inference_path_list):
     
     #For now just load one inference_object
     inference_obj = InferenceResults.load(inference_path_list)
-    return inference_dict
+    return inference_obj

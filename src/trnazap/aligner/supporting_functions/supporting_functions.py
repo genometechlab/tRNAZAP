@@ -12,6 +12,8 @@ import pysam
 from alignment_functions import align_read
 from tRNAzap.Inference
 
+from pathlib import Path
+
 
 def get_model_to_ref():
     """
@@ -22,10 +24,11 @@ def get_model_to_ref():
 
     return: Dictionary looking up reference from the model name
     """
+
     return {
-        "human-mt": "./references/human-mt_reference.fa",
-        "yeast": "./references/human-mt_reference.fa",
-        "e_coli": "./references/human-mt_reference.fa",
+        "human-mt": Path(__file__).parent / 'reference' / 'hg38-mature-tRNAs.fa',
+        "yeast": Path(__file__).parent / 'reference' / 'sacCer3-mature-tRNAs.fa',
+        "e_coli": Path(__file__).parent / 'reference' / 'eschColi_K_12_MG1655-mature-tRNAs.fa',
     }
 
 
@@ -62,44 +65,6 @@ def process_ref(ref_path, program_info):
         ref_dict[i] = {"reference_name": seq.name, "reference_seq": seq.sequence}
 
     return bam_header, ref_dict
-
-
-def load_inference_obj(inference_path_list, ref_dict):
-    """
-    Read in the pickled inference object(s).
-
-    params:
-        inference_path_list: list of paths to pickled results from the
-        inference step
-        ref_dict: Dictionary of numeric tRNA reference code keys with sequence
-        and name information.
-
-    return: A dictionary for each read in the dataset.
-    """
-    inference_dict = {}
-    for inference_path in inference_path_list:
-        with open(inference_path, "rb") as infile:
-            inf_obj = pickle.load(infile)
-
-        for read_id in inf_obj:
-            inference_dict[read_id] = {
-                "pred": inf_obj[read_id]["pred"],
-                "scores": inf_obj[read_id]["scores"],
-            }
-            if inf_obj[read_id]["trna_indices"] != (-1, -1):
-                inference_dict[read_id]["trna_indices"] = (
-                    64 * inf_obj[read_id]["trna_indices"][0],
-                    64 * inf_obj[read_id]["trna_indices"][1],
-                )
-            else:
-                inference_dict[read_id]["trna_indices"] = (-1, -1)
-            if "gt" in inf_obj[read_id]:
-                inference_dict[read_id]["gt"] = ref_dict[inf_obj[read_id]["gt"]][
-                    "reference_name"
-                ]
-
-    return inference_dict
-
 
 def split_read_ids(unaligned_bam, threads):
     """
