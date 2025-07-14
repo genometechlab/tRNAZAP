@@ -1,74 +1,60 @@
-# src/trnazap/splitter/io/archive/archive_reader.py
-"""Reader for ZIR archive format."""
-
 import struct
 import json
+import os
 import zstandard as zstd
 from pathlib import Path
-from typing import Optional, Iterator, Dict, Any, TYPE_CHECKING, List, Union
+from typing import Optional, Iterator, Dict, Any, TYPE_CHECKING, List, Union, Collection, Set, Generator, Iterable
 import numpy as np
 import logging
-
+from concurrent.futures import Future, ThreadPoolExecutor
+from functools import lru_cache, partial
 from .archive_format import (
     MAGIC_BYTES, FORMAT_VERSION, HEADER_SIZE,
     RECORD_MARKER
 )
+
+from ...utils import search_path
 
 if TYPE_CHECKING:
     from ...storages import InferenceMetadata, ReadResult, InferenceResults
 
 logger = logging.getLogger(__name__)
 
+PathLike = Union[str, Path, os.PathLike]
+
 
 class ZIRReader:
     """Read inference results from ZIR archive format(s)."""
     
-    def __init__(self, path: Union[Path, List[Path]], index=False):
+    def __init__(self, paths: Union[Path, List[Path]], index=False):
         """
         Initialize reader.
         
         Args:
             path: Archive file path or list of paths
             index: Whether to build index on initialization
-        """
-
-        if isinstance(path, (str, Path)):
-            paths = [Path(path)]
-        else:
-            paths = [Path(p) for p in path]
-
-        final_paths = []
-        for p in paths:
-            p = Path(p)  # Ensure it's a Path object
-            if p.is_dir():
-                # Use Path.glob instead of glob.glob for consistency
-                zir_files = sorted(p.glob("*.zir"))  # Sort for reproducibility
-                if not zir_files:
-                    logger.warning(f"No .zir files found in directory: {p}")
-                final_paths.extend(zir_files)
-            elif p.exists():
-                final_paths.append(p)
-            else:
-                raise FileNotFoundError(f"Path does not exist: {p}")
-
-        if not final_paths:
-            raise ValueError("No valid .zir files found")
-
-        self.paths = final_paths
-        self.is_multi = len(self.paths) > 1
+        """     
+        self._paths: List[Path] = sorted(
+            self._collect_dataset(
+                paths, recursive=True, pattern='*.zir', threads=4
+            )
+        )
+        self.is_multi = len(self._paths) > 1
 
         
         self.files = []
         metadata_dicts = []
+        self.decompressors = []
         self.record_counts = []
         self.record_count = 0
         
-        for p in self.paths:
+        for p in self._paths:
             file = open(p, 'rb')
             self.files.append(file)
 
             metadata_dict, record_count = self._read_header_from_file(file)
             metadata_dicts.append(metadata_dict)
+            self.decompressors.append(zstd.ZstdDecompressor())
             self.record_counts.append(record_count)
             self.record_count += record_count
         
@@ -77,8 +63,6 @@ class ZIRReader:
             self._check_metadata_compatibility(metadata_dicts)
         
         self.metadata_dict = metadata_dicts[0]
-
-        self.decompressor = zstd.ZstdDecompressor()
         
         self._index = None
         self._current_file_idx = 0
@@ -86,6 +70,29 @@ class ZIRReader:
         # Build index if demanded
         if index:
             self.build_index()
+
+    @staticmethod
+    def _collect_dataset(
+        paths: Union[PathLike, Collection[PathLike]],
+        recursive: bool,
+        pattern: str,
+        threads: int,
+    ) -> Set[Path]:
+        if isinstance(paths, (str, Path, os.PathLike)):
+            paths = [paths]
+
+        if not isinstance(paths, Collection):
+            raise TypeError(
+                f"paths must be a Collection[PathOrStr] but found {type(paths)=}"
+            )
+
+        paths = [Path(p) for p in paths]
+        collected: Set[Path] = set()
+        with ThreadPoolExecutor(max_workers=threads) as executor:
+            search = partial(search_path, recursive=recursive, patterns=[pattern])
+            for coll in executor.map(search, paths):
+                collected.update(coll)
+        return collected
 
     def _check_metadata_compatibility(self, metadata_dicts):
         """Check if all files have compatible metadata."""
@@ -111,7 +118,7 @@ class ZIRReader:
                         f.close()
                     
                     raise ValueError(
-                        f"Incompatible metadata in file {self.paths[i]}: "
+                        f"Incompatible metadata in file {self._paths[i]}: "
                         f"{field} mismatch - expected '{first_value}' but got '{current_value}'. "
                         f"All archives must be from the same model."
                     )
@@ -162,13 +169,22 @@ class ZIRReader:
         return self.record_count
     
     def __iter__(self) -> Iterator['ReadResult']:
+        yield from self.reads()
+
+    def reads(self,
+              selection: Optional[Iterable[str]] = None
+              ) -> Generator["ReadResult", None, None]:
         """Iterate through all records sequentially."""
         for file_idx, (file, record_count) in enumerate(zip(self.files, self.record_counts)):
             self._current_file_idx = file_idx
             file.seek(HEADER_SIZE)
             
             for _ in range(record_count):
-                yield self._read_next_record_from_file(file_idx)
+                next_read = self._read_next_record_from_file(file_idx)
+                next_read_id = next_read.read_id
+                if selection and next_read_id not in selection:
+                    continue
+                yield next_read
 
     def _read_next_record_from_file(self, file_idx: int) -> 'ReadResult':
         """Read the next record from specific file."""
@@ -185,7 +201,7 @@ class ZIRReader:
         
         # Read and decompress data
         compressed_data = file.read(compressed_size)
-        data = self.decompressor.decompress(compressed_data)
+        data = self.decompressors[file_idx].decompress(compressed_data)
         
         if len(data) != uncompressed_size:
             raise ValueError(f"Decompression size mismatch: expected {uncompressed_size}, got {len(data)}")
@@ -237,10 +253,6 @@ class ZIRReader:
             chunk_size=chunk_size
         )
     
-    def _read_next_record(self) -> 'ReadResult':
-        """Read the next record - for single file compatibility."""
-        return self._read_next_record_from_file(0)
-    
     def build_index(self):
         """Build index for random access. Scans entire file once."""
         if self._index is not None:
@@ -271,7 +283,7 @@ class ZIRReader:
                 compressed_data = file.read(compressed_size)
                 
                 # We need to decompress just enough to get the read_id
-                data = self.decompressor.decompress(compressed_data)
+                data = self.decompressors[file_idx].decompress(compressed_data)
                 
                 # Extract read_id
                 read_id_len = struct.unpack_from('<H', data, 0)[0]
@@ -312,7 +324,7 @@ class ZIRReader:
             raise KeyError(f"Read ID '{read_id}' not found in any archive")
         
         file_idx = self._index[read_id]['file_idx']
-        return self.paths[file_idx]
+        return self._paths[file_idx]
     
     def __contains__(self, read_id: str) -> bool:
         """Check if read_id exists in archive."""
@@ -359,8 +371,8 @@ class ZIRReader:
         """Get archive summary information."""
         if self.is_multi:
             return {
-                'num_archives': len(self.paths),
-                'paths': [str(p) for p in self.paths],
+                'num_archives': len(self._paths),
+                'paths': [str(p) for p in self._paths],
                 'total_record_count': self.record_count,
                 'record_counts_per_file': self.record_counts,
                 'indexed': self._index is not None,
@@ -368,7 +380,7 @@ class ZIRReader:
             }
         else:
             return {
-                'path': str(self.paths[0]),
+                'path': str(self._paths[0]),
                 'format_version': FORMAT_VERSION,
                 'record_count': self.record_count,
                 'model_name': self.metadata_dict.get('model_name'),
