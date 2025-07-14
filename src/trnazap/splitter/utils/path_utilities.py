@@ -1,5 +1,6 @@
 from pathlib import Path
-from typing import Iterable, List, Union, Optional
+from typing import Iterable, List, Union, Optional, Collection, Set
+import glob
 
 class PathSet:
     def __init__(self, paths: Optional[Iterable[Union[str, Path]]]=None):
@@ -45,4 +46,29 @@ class PathSet:
 
     def __repr__(self):
         return f"PathSet({self.to_list()})"
+    
+
+
+def search_path(path: Path, recursive: bool, patterns: Collection[str]) -> Set[Path]:
+    """
+    Search `path` matching `pattern` searching directories recursively if requested
+    """
+
+    def _any_match(path: Path):
+        return any(path.match(p) for p in patterns)
+
+    # Get the recursive or non-recursive glob function.
+    matching_files = set()
+    if path.is_dir():
+        pattern = str(path / "**" / "*") if recursive else str(path / "*")
+        for matching_pathname in glob.glob(pattern, recursive=recursive):
+            matching_path = Path(matching_pathname)
+            if matching_path.is_file() and _any_match(matching_path):
+                matching_files.add(matching_path)
+
+    # Non-directory, assert that it is a file and that it matches the file_pattern
+    elif path.is_file() and _any_match(path):
+        matching_files.add(path)
+
+    return matching_files
 
