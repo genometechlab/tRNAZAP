@@ -8,8 +8,6 @@ import argparse
 import sys
 from multiprocessing import Pool
 
-from in
-
 from aligner.supporting_functions.supporting_functions import (
     make_parameter_list,
     make_sub_bam,
