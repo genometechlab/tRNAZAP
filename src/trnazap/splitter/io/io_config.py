@@ -7,6 +7,7 @@ class FileFormat(Enum):
     """Supported file formats for serialization."""
     PARQUET = "parquet"
     PICKLE = "pickle"
+    ZIR = "zir"  # Archive file format
 
 class FormatConfig:
     """Configuration for file formats."""
@@ -14,18 +15,21 @@ class FormatConfig:
     # Supported extensions for each format
     EXTENSIONS: Dict[FileFormat, Set[str]] = {
         FileFormat.PARQUET: {'.parquet', '.pq', '.parq'},
-        FileFormat.PICKLE: {'.pkl', '.pickle'}
+        FileFormat.PICKLE: {'.pkl', '.pickle'},
+        FileFormat.ZIR: {'.zir'}
     }
     
     # Default extension for each format
     DEFAULT_EXTENSION: Dict[FileFormat, str] = {
         FileFormat.PARQUET: '.parquet',
-        FileFormat.PICKLE: '.pkl'
+        FileFormat.PICKLE: '.pkl',
+        FileFormat.ZIR: '.zir'
     }
     
     # Magic bytes for format detection
     MAGIC_BYTES: Dict[bytes, FileFormat] = {
         b'PAR1': FileFormat.PARQUET,
+        b'ZIR\x00': FileFormat.ZIR  # Add ZIR magic bytes
     }
     
     @classmethod
