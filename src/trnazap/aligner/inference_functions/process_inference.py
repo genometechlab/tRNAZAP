@@ -1,6 +1,6 @@
 """Module for processing tRNA model inference output."""
 from splitter.storages.inference_results import InferenceResults
-from trnazap.splitter import ModelConfig, ModelLoader, Inference, ResultsVisualizer, ZIRReader
+from splitter import ModelConfig, ModelLoader, Inference, ResultsVisualizer, ZIRReader
 import torch
 import tqdm
 
@@ -24,6 +24,7 @@ def load_inference_obj(inference_path_list):
             for read_result in tqdm.tqdm(zip_reader):
                 variable_region = read_result.variable_region_range
                 cls_ = lbls_to_cls[str(read_result.classification_pred)]
-                inference_obj[read_results.read_id] = (cls_, variable_region)
-        #For now just load one inference_object
+                inference_obj[read_result.read_id] = (cls_, variable_region)
+            if len(inference_obj) >= 1000000:
+                break
     return inference_obj

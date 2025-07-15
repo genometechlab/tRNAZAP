@@ -13,13 +13,13 @@ from aligner.supporting_functions.supporting_functions import (
     make_sub_bam,
     process_ref,
     split_read_ids,
+    get_model_to_ref
 )
 
 from aligner.inference_functions.process_inference import load_inference_obj
 
 program_name = "tRNA_zap"
 version = "05_16_25_v0.1.2"
-
 
 def main(
     unaligned_bam, inference_list, out_dir, out_pre, threads, model, all_alignments
@@ -53,11 +53,7 @@ def main(
         work in parallel across the specified number of threads.
     """
     # Identifying the appropriate reference based on the model selected
-    model_to_ref = {
-        "human-mt": "./references/human-mt_reference.fa",
-        "yeast": "./references/human-mt_reference.fa",
-        "e_coli": "./references/human-mt_reference.fa",
-    }
+    model_to_ref = get_model_to_ref()
 
     # Attempt to load model path, if the model is not recognized print a help
     # message and terminate the program.
@@ -76,6 +72,9 @@ def main(
     bam_header, ref_dict = process_ref(
         ref, (program_name, version, program_name, sys.argv)
     )
+
+    for key, value in ref_dict.items():
+        print(f"{key=}:{value=}")
 
     # Inference dict includes information for each read about the highest probablity
     # class, the indicies for tRNA in signal space, and if this is a training or

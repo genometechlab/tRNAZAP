@@ -25,9 +25,9 @@ def get_model_to_ref():
     """
 
     return {
-        "human-mt": Path(__file__).parent / 'reference' / 'hg38-mature-tRNAs.fa',
-        "yeast": Path(__file__).parent / 'reference' / 'sacCer3-mature-tRNAs.fa',
-        "e_coli": Path(__file__).parent / 'reference' / 'eschColi_K_12_MG1655-mature-tRNAs.fa',
+        "human-mt": Path(__file__).parent.parent / 'references' / 'hg38-mature-tRNAs.fa',
+        "yeast": Path(__file__).parent.parent / 'references' / 'sacCer3-mature-tRNAs.fa',
+        "e_coli": Path(__file__).parent.parent / 'references' / 'eschColi_K_12_MG1655-mature-tRNAs.fa',
     }
 
 
@@ -61,8 +61,8 @@ def process_ref(ref_path, program_info):
         # Update the SQ tags
         bam_header["SQ"].append({"LN": len(seq.sequence), "SN": seq.name})
 
-        ref_dict[i] = {"reference_name": seq.name, "reference_seq": seq.sequence}
-
+        #ref_dict[i] = {"reference_name": seq.name, "reference_seq": seq.sequence}
+        ref_dict[seq.name] = {'reference_index': i, 'reference_seq':seq.sequence}
     return bam_header, ref_dict
 
 def split_read_ids(unaligned_bam, threads):
@@ -246,13 +246,14 @@ def make_sub_bam(args_list):
             assigned_ref_sequence = ref_dict[assigned_ref][
                 "reference_seq"
             ]
+            assigned_ref_index = ref_dict[assigned_ref]['reference_index']
 
             # Perform the actual sequence alignment using our custom algorithm
             # This creates a new AlignedSegment with proper CIGAR, coordinates, etc.
             aligned_read = align_read(
                 read,
                 inference_dict[read.query_name],
-                assigned_ref,
+                assigned_ref_index,
                 assigned_ref_sequence,
             )
 
@@ -300,7 +301,7 @@ def make_sub_bam(args_list):
 
                         # Validate the cigar string <- remove for perfomance boost?
                         _ = check_cigar(
-                            aligned_read.get_cigar_stats(), aligned_read.query_sequence
+                            aligned_read.get_cigar_stats(), len(aligned_read.query_sequence)
                         )
 
                         # Write the successfully aligned and validated read

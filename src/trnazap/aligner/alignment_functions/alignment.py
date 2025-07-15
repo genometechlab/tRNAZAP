@@ -951,7 +951,7 @@ def align_read(
         # Try a more permissive fragment-based alignment approach
         # This might find a better local alignment for partial sequences
         cigar, edit_dist, ref_start, ref_stop, query_start, query_stop = fragment_align(
-            sub_sequence, ref_sequence
+            sub_sequence, ref_sequence, five_clip, three_clip
         )
         
         # If fragment alignment succeeded and is better than our original alignment
