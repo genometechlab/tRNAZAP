@@ -242,7 +242,7 @@ def make_sub_bam(args_list):
 
             # Extract the predicted reference sequence information
             # The inference model tells us which tRNA reference this read best matches
-            assigned_ref = inference_dict[read.query_name].classification_pred
+            assigned_ref = inference_dict[read.query_name][0]
             assigned_ref_sequence = ref_dict[assigned_ref][
                 "reference_seq"
             ]

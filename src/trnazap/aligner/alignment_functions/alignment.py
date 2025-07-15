@@ -874,7 +874,7 @@ def align_read(
     
     # Check if the ML model successfully identified a tRNA region in this read
     # The value (-1, -1) is a sentinel indicating "no tRNA found"
-    if inference_dict_read.variable_region_range == (-1, -1):
+    if inference_dict_read[1] == (-1, -1):
         # No predicted tRNA region - return the original read unchanged
         # This preserves any existing alignment information
         return pysam_read
@@ -886,7 +886,7 @@ def align_read(
     # - five_slice: number of bases before the tRNA (5' end)
     # These flanking regions will be soft-clipped in the final alignment
     sub_sequence, three_slice, five_slice = subset_sequence(
-        pysam_read, inference_dict_read.variable_region_range
+        pysam_read, inference_dict_read[1]
     )
     
     # Sanity check: ensure we actually extracted something

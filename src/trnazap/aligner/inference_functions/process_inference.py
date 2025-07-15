@@ -1,5 +1,8 @@
 """Module for processing tRNA model inference output."""
 from splitter.storages.inference_results import InferenceResults
+from trnazap.splitter import ModelConfig, ModelLoader, Inference, ResultsVisualizer, ZIRReader
+import torch
+import tqdm
 
 def load_inference_obj(inference_path_list):
     """
@@ -13,6 +16,14 @@ def load_inference_obj(inference_path_list):
 
     return: A dictionary for each read in the dataset.
     """
-    #For now just load one inference_object
-    inference_obj = InferenceResults.load(inference_path_list)
+
+    inference_obj={}
+    for pth in inference_path_list:
+        with ZIRReader(pth, index=False) as zip_reader:
+            lbls_to_cls = zip_reader.metadata.label_names
+            for read_result in tqdm.tqdm(zip_reader):
+                variable_region = read_result.variable_region_range
+                cls_ = lbls_to_cls[str(read_result.classification_pred)]
+                inference_obj[read_results.read_id] = (cls_, variable_region)
+        #For now just load one inference_object
     return inference_obj
