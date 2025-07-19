@@ -82,9 +82,6 @@ def main(
         ref, (program_name, version, program_name, sys.argv)
     )
 
-    for key, value in ref_dict.items():
-        print(f"{key=}:{value=}")
-
     # Inference dict includes information for each read about the highest probablity
     # class, the indicies for tRNA in signal space, and if this is a training or
     # validation dataset it adds a ground truth label ('gt').

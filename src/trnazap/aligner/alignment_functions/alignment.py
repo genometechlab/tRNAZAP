@@ -11,7 +11,7 @@ import pysam
 from numba import njit
 
 
-@njit(parallel=True)
+@njit(parallel=True, cache = True, fastmath = True)
 def wagner_fisher(s: str, t: str):
     """Optimized Levenshtein distance calculation for tRNA.
 
@@ -35,17 +35,11 @@ def wagner_fisher(s: str, t: str):
             matrix
     """
     m, n = len(s), len(t)
-    d = np.zeros(shape=(m + 1, n + 1), dtype=np.float64)
+    d = np.zeros(shape=(m + 1, n + 1), dtype=np.float32)
 
     # Initialize first row with zeros to allow free start gaps in reference
     # This means the query can start aligning at any position in the reference
-    for j in range(n + 1):
-        d[0, j] = j
-
-    # Initialize first column with increasing values
-    # This represents the cost of deleting characters from the query
-    for i in range(1, m + 1):
-        d[i, 0] = 0
+    d[0, :] = np.arange(n + 1, dtype=np.float32)
 
     # Fill the matrix
     for j in range(1, n + 1):
@@ -61,10 +55,73 @@ def wagner_fisher(s: str, t: str):
                 d[i - 1, j - 1] + substitution_cost,
             )  # substitution/match
 
-    return d[m, n], d
+    return d
 
+@njit(cache=True, fastmath=True)
+def calculate_vertical_traversal(d):
+    """Optimized vertical traversal with reduced memory allocation"""
+    rows, cols = d.shape
+    
+    # Pre-allocate all arrays
+    trav_mat = np.full((rows, cols), -1, dtype=np.int32)
+    traversal_distance = np.full(rows, rows + cols + 1, dtype=np.int32)
+    
+    # Work backwards through seeds
+    for seed in range(rows - 1, -1, -1):
+        if trav_mat[seed, cols - 1] != -1:
+            # Already computed
+            continue
+            
+        # Track path using arrays instead of lists
+        path_x = np.zeros(rows + cols, dtype=np.int32)
+        path_y = np.zeros(rows + cols, dtype=np.int32)
+        
+        tmp_x, tmp_y = seed, cols - 1
+        path_idx = 0
+        path_x[path_idx] = tmp_x
+        path_y[path_idx] = tmp_y
+        path_idx += 1
+        
+        start = tmp_x
+        
+        while tmp_y > 1:
+            # Compute scores only once
+            del_score = d[tmp_x - 1, tmp_y] if tmp_x >= 1 else np.inf
+            ins_score = d[tmp_x, tmp_y - 1] if tmp_y >= 1 else np.inf
+            sub_score = d[tmp_x - 1, tmp_y - 1] if (tmp_x >= 1 and tmp_y >= 1) else np.inf
+            
+            # Find minimum and corresponding move
+            if sub_score <= del_score and sub_score <= ins_score:
+                if tmp_x > 0 and tmp_y > 0 and trav_mat[tmp_x - 1, tmp_y - 1] != -1:
+                    start = trav_mat[tmp_x - 1, tmp_y - 1]
+                    break
+                tmp_x -= 1
+                tmp_y -= 1
+            elif ins_score <= del_score:
+                if tmp_y > 0 and trav_mat[tmp_x, tmp_y - 1] != -1:
+                    start = trav_mat[tmp_x, tmp_y - 1]
+                    break
+                tmp_y -= 1
+            else:
+                if tmp_x > 0 and trav_mat[tmp_x - 1, tmp_y] != -1:
+                    start = trav_mat[tmp_x - 1, tmp_y]
+                    break
+                tmp_x -= 1
+            
+            start = tmp_x
+            path_x[path_idx] = tmp_x
+            path_y[path_idx] = tmp_y
+            path_idx += 1
+        
+        # Update trav_mat for all positions in path
+        for i in range(path_idx):
+            trav_mat[path_x[i], path_y[i]] = start
+        
+        traversal_distance[seed] = abs(seed - start)
+    
+    return trav_mat, traversal_distance
 
-def calcuate_vertical_traversal(d):
+def calculate_vertical_traversal_old(d):
     """
     Calculate the vertical traversal path.
 
@@ -191,7 +248,7 @@ def wagner_fisher_truncated(d):
             - int: Ending position in the reference sequence
     """
     # Traversal Distances
-    trav, trav_dist = calcuate_vertical_traversal(d)
+    trav, trav_dist = calculate_vertical_traversal(d)
 
     scores = d[1:, -1] + 1
     with np.errstate(divide='ignore'):
@@ -203,7 +260,6 @@ def wagner_fisher_truncated(d):
     # Return the distance at the selected point, the
     # truncated matrix, and the truncation point
     return d[: truncate_idx + 1, :], trav[(truncate_idx, -1)], truncate_idx
-
 
 def compute_edit_operations(s: str, t: str):
     """
@@ -232,7 +288,7 @@ def compute_edit_operations(s: str, t: str):
         - 'd' (100): Deletion
     """
     # Get the distance matrix and truncate it
-    _, full_matrix = wagner_fisher(s, t)
+    full_matrix = wagner_fisher(s, t)
     d, start, stop = wagner_fisher_truncated(full_matrix)
 
     # We're Going to try a full truncation
@@ -508,7 +564,7 @@ def check_fragment(cigar, reference_length, min_del_proportion=0.15):
         return True
     return False
 
-@njit(parallel=True)
+@njit(parallel=True, cache=True, fastmath=True)
 def smith_waterman_for_fragment(tRNA, fragment):
     """Perform Smith-Waterman local alignment between a tRNA and fragment sequence.
     

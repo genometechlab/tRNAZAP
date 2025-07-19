@@ -263,8 +263,8 @@ def make_sub_bam(args_list):
                 continue
 
             reads_processed += 1
-            if reads_processed % 1000 == 0:
-                increment_counter(monitor, 1000)
+            if reads_processed % 5000 == 0:
+                increment_counter(monitor, 5000)
             # Extract the predicted reference sequence information
             # The inference model tells us which tRNA reference this read best matches
             assigned_ref = inference_dict[read.query_name][0]
@@ -285,14 +285,14 @@ def make_sub_bam(args_list):
             # Handle unmapped reads - write them as-is without further processing
             # These are reads where the alignment algorithm couldn't find a good match
             if aligned_read.is_unmapped:
-                outf.write(aligned_read)
+                #outf.write(aligned_read)
                 continue
 
             # Validate the cigar string <- remove for perfomance boost?
             _ = check_cigar(aligned_read.get_cigar_stats(), len(aligned_read.query_sequence), aligned_read.cigarstring, aligned_read.query_sequence, aligned_read.reference_id, aligned_read.reference_start, assigned_ref_sequence, aligned_read.get_tags())
 
             # Write the successfully aligned and validated read to the output BAM
-            outf.write(aligned_read)
+            #outf.write(aligned_read)
 
             # Check if a secondary alignments should be performed, if all_alignments
             # Iterate and perform alignments giving a secondary mapping quality for
@@ -334,7 +334,7 @@ def make_sub_bam(args_list):
                     # To the output BAM
                     outf.write(aligned_read)
             '''
-    increment_counter(monitor, len(read_id_set) - reads_processed + (reads_processed % 1000))
+    increment_counter(monitor, len(read_id_set) - reads_processed + (reads_processed % 5000))
     #if reads_processed % 1000 != 0:
     #    increment_counter(monitor, reads_processed % 1000)
     #if reads_processed != len(read_id_set):
