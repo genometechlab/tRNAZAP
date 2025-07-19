@@ -11,7 +11,7 @@ import pysam
 from numba import njit
 
 
-@njit
+@njit(parallel=True)
 def wagner_fisher(s: str, t: str):
     """Optimized Levenshtein distance calculation for tRNA.
 
@@ -194,7 +194,8 @@ def wagner_fisher_truncated(d):
     trav, trav_dist = calcuate_vertical_traversal(d)
 
     scores = d[1:, -1] + 1
-    scores = scores / trav_dist[1:]
+    with np.errstate(divide='ignore'):
+        scores = scores / trav_dist[1:]
 
     # Find the row with the minimum score
     truncate_idx = np.argmin(scores) + 1  # +1 because we skipped row 0
@@ -343,7 +344,7 @@ def cigar_tuples_from_edit_instrucitons(
 
     # Handle soft clipping at the start (query_start > 0)
     if max(query_start + five_clip, 0) > 0:
-        cigar_tuples.append((4, query_start + five_clip))
+        cigar_tuples.append((4, int(query_start + five_clip)))
 
     # Convert main alignment operations to CIGAR format
     # Group consecutive operations of the same type
@@ -377,18 +378,18 @@ def cigar_tuples_from_edit_instrucitons(
         else:
             # Add previous operation group to CIGAR string
             if prev_char != "":
-                cigar_tuples.append((prev_char, count))
+                cigar_tuples.append((int(prev_char), int(count)))
             # Start new operation group
             prev_char = cigar_op
             count = 1
 
     # Add the last operation group
     if prev_char:
-        cigar_tuples.append((prev_char, count))
+        cigar_tuples.append((int(prev_char), int(count)))
 
     # Handle soft clipping at the end of the alignment
     if query_end + three_clip > 0:
-        cigar_tuples.append((4, query_end + three_clip))
+        cigar_tuples.append((4, int(query_end + three_clip)))
 
     # Calculate the total edit distance
     # Only count operations that aren't matches or soft clips
@@ -482,7 +483,9 @@ def subset_sequence(pysam_read, trna_indices):
 
     # Get array indices for the first position after start and last position before end
     start = start[0][0]  # First base within tRNA region
-    stop = stop[0][-1] - 1  # Last base within tRNA region
+    #stop = stop[0][-1] - 1  # Last base within tRNA region
+    #testing why the -1 was there
+    stop = stop[0][-1]
 
     # Calculate the length of unaligned regions for soft-clipping
     # These are important for generating correct CIGAR strings later
@@ -495,7 +498,7 @@ def subset_sequence(pysam_read, trna_indices):
     reverse_sequence = pysam_read.query_sequence[::-1]
     return reverse_sequence[start:stop][::-1], three_prime_slice, five_prime_slice
 
-def check_fragment(cigar, reference_length, min_del_proportion=0.35):
+def check_fragment(cigar, reference_length, min_del_proportion=0.15):
     """
     Docstring
     """
@@ -505,6 +508,7 @@ def check_fragment(cigar, reference_length, min_del_proportion=0.35):
         return True
     return False
 
+@njit(parallel=True)
 def smith_waterman_for_fragment(tRNA, fragment):
     """Perform Smith-Waterman local alignment between a tRNA and fragment sequence.
     
@@ -618,14 +622,14 @@ def smith_waterman_for_fragment(tRNA, fragment):
                   deletion_score >= 0):
                 
                 score_mat[i][j] = deletion_score
-                traceback_mat[i][j] = 3  # CIGAR 'D' - deletion relative to reference
+                traceback_mat[i][j] = 2  # CIGAR 'D' - deletion relative to reference
                 # Coming from left cell, so copy its match count
                 length_mat[i][j] = length_mat[i][j-1]
             
             elif (insertion_score >= 0):
                 
                 score_mat[i][j] = insertion_score
-                traceback_mat[i][j] = 4  # CIGAR 'I' - insertion relative to reference
+                traceback_mat[i][j] = 1  # CIGAR 'I' - insertion relative to reference
                 # Coming from above cell, so copy its match count
                 length_mat[i][j] = length_mat[i-1][j]
             
@@ -655,8 +659,8 @@ def edit_instructions_from_smith_waterman(traceback_mat, max_len, tRNA_start, fr
     The function uses extended CIGAR operation codes:
     - 7: Match (= in extended CIGAR)
     - 8: Mismatch (X in extended CIGAR)
-    - 3: Deletion (D in CIGAR) - base in reference but not in query
-    - 4: Insertion (I in CIGAR) - base in query but not in reference
+    - 2: Deletion (D in CIGAR) - base in reference but not in query
+    - 1: Insertion (I in CIGAR) - base in query but not in reference
     - -1: Stop signal indicating start of alignment
     
     Args:
@@ -716,12 +720,12 @@ def edit_instructions_from_smith_waterman(traceback_mat, max_len, tRNA_start, fr
         # Move to the previous cell based on the operation type
         # The movement direction tells us which sequences consumed bases
         
-        if traceback_mat[i,j] == 4:  # Insertion operation
+        if traceback_mat[i,j] == 1:  # Insertion operation
             # Fragment has an extra base relative to tRNA
             # Move left in matrix (only fragment position decreases)
             j -= 1
             
-        elif traceback_mat[i,j] == 3:  # Deletion operation
+        elif traceback_mat[i,j] == 2:  # Deletion operation
             # tRNA has an extra base relative to fragment  
             # Move up in matrix (only tRNA position decreases)
             i -= 1
@@ -754,7 +758,7 @@ def edit_instructions_from_smith_waterman(traceback_mat, max_len, tRNA_start, fr
     # instruction_pos+1 because instruction_pos points to the last unused position
     # Also return the final positions, which represent the alignment START
     # (confusingly named 'end' for historical reasons)
-    return edit_instructions[instruction_pos+1:], j, i
+    return edit_instructions[instruction_pos+1:], i, j
 
 def fragment_align(sub_sequence, ref_sequence, five_clip, three_clip):
     """Align a fragment sequence to a reference sequence and generate CIGAR string.
@@ -813,17 +817,18 @@ def fragment_align(sub_sequence, ref_sequence, five_clip, three_clip):
         tRNA_start,                               # Row where we begin traceback (alignment end)
         frag_start                                # Column where we begin traceback (alignment end)
     )
-    
+
+    query_end = len(sub_sequence) - frag_start
     # Step 4: Convert edit instructions to standard CIGAR format
     # CIGAR strings are the standard way to represent alignments in bioinformatics
     # The five_clip and three_clip parameters are used to add soft-clipping operations
     # to the CIGAR string for bases that were trimmed before alignment
     # Note: There's a typo in the function name (instrucitons -> instructions)
     cigar, edit_dist = cigar_tuples_from_edit_instrucitons(
-        edit_instructions,   # Array of operation codes from traceback
-        frag_start,         # End position in fragment (for boundary handling)
+        edit_instructions,  # Array of operation codes from traceback
+        frag_end,           # End position in fragment (for boundary handling)
         five_clip,          # Bases clipped from 5' end (will add S operation to CIGAR)
-        frag_end,           # Start position in fragment (for boundary handling)
+        query_end,          # Start position in fragment (for boundary handling)
         three_clip,         # Bases clipped from 3' end (will add S operation to CIGAR)
         numeric_code=True   # Return numeric CIGAR codes instead of letters
     )
@@ -874,9 +879,11 @@ def align_read(
     
     # Check if the ML model successfully identified a tRNA region in this read
     # The value (-1, -1) is a sentinel indicating "no tRNA found"
+    #print(inference_dict_read[1])
     if inference_dict_read[1] == (-1, -1):
         # No predicted tRNA region - return the original read unchanged
         # This preserves any existing alignment information
+        #print("skipped")
         return pysam_read
     
     # Extract the predicted tRNA portion from the full read sequence
@@ -888,7 +895,8 @@ def align_read(
     sub_sequence, three_slice, five_slice = subset_sequence(
         pysam_read, inference_dict_read[1]
     )
-    
+    #print(f"{pysam_read.query_sequence=}")
+    #print(f"{sub_sequence=}\t{three_slice=}\t{five_slice=}")
     # Sanity check: ensure we actually extracted something
     # This could fail if the predicted boundaries were invalid
     if len(sub_sequence) == 0:
@@ -932,7 +940,7 @@ def align_read(
     # CIGAR strings encode alignments compactly: M=match/mismatch, I=insertion, D=deletion, S=soft clip
     # The soft clipping (S operations) indicates bases present in the read but not part of alignment
     a.cigar, edit_dist = cigar_tuples_from_edit_instrucitons(
-        edit_instruction_list,               # The alignment operations to encode
+        edit_instruction_list,              # The alignment operations to encode
         query_start=max(0, start - 1),      # Convert to 0-based coordinates (alignment uses 1-based)
         five_clip=five_slice,               # Bases before tRNA to soft-clip (5' end)
         query_end=len(sub_sequence) - stop, # Calculate bases after alignment to soft-clip
@@ -954,19 +962,23 @@ def align_read(
             sub_sequence, ref_sequence, five_slice, three_slice
         )
         
+        if cigar is None:
+            return pysam_read
+            
+        
         # If fragment alignment succeeded and is better than our original alignment
         # (lower edit distance = better alignment), use it instead
-        if cigar is not None and edit_dist < a.get_tag("ED"):
+        elif edit_dist / ((ref_start-ref_stop)) < a.get_tag("ED")/(abs(a.reference_start - a.reference_end)):
             # Mark this as a fragment alignment with a custom tag
-            a.set_tag("FRG", 1)
-            
+            a.set_tag("FG", 1)
+            a.set_tag("ED", edit_dist)
             # IMPORTANT: ref_stop here is actually where the alignment STARTS
             # This is due to the traceback perspective in the fragment_align function
             # where 'stop' means where we stop tracing back (= start of alignment)
             a.reference_start = ref_stop
-            
             # Replace with the better CIGAR from fragment alignment
             a.cigar = cigar
+    
     
     # Return the completed alignment record, ready for output to BAM/SAM
     return a
