@@ -147,7 +147,7 @@ if __name__ == "__main__":
         "-i",
         type=str,
         required=True,
-        nargs="*",
+        nargs='*',
         help="tRNA model inference results, multiple inference files can be provided"
         + " such as from the results of mulitple sequencing runs",
     )

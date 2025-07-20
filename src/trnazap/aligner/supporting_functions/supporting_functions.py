@@ -285,14 +285,14 @@ def make_sub_bam(args_list):
             # Handle unmapped reads - write them as-is without further processing
             # These are reads where the alignment algorithm couldn't find a good match
             if aligned_read.is_unmapped:
-                #outf.write(aligned_read)
+                outf.write(aligned_read)
                 continue
 
             # Validate the cigar string <- remove for perfomance boost?
             _ = check_cigar(aligned_read.get_cigar_stats(), len(aligned_read.query_sequence), aligned_read.cigarstring, aligned_read.query_sequence, aligned_read.reference_id, aligned_read.reference_start, assigned_ref_sequence, aligned_read.get_tags())
 
             # Write the successfully aligned and validated read to the output BAM
-            #outf.write(aligned_read)
+            outf.write(aligned_read)
 
             # Check if a secondary alignments should be performed, if all_alignments
             # Iterate and perform alignments giving a secondary mapping quality for
