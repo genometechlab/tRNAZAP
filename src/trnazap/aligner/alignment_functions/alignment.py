@@ -1018,23 +1018,23 @@ def align_read(
             sub_sequence, ref_sequence, five_slice, three_slice
         )
         
-        if cigar is None:
+        if (cigar is None or 
+            (edit_dist > (ref_start-ref_stop) * 0.3)
+           ):
             return pysam_read
             
         
         # If fragment alignment succeeded and is better than our original alignment
         # (lower edit distance = better alignment), use it instead
-        elif edit_dist / ((ref_start-ref_stop)) < a.get_tag("ED")/(abs(a.reference_start - a.reference_end)):
-            # Mark this as a fragment alignment with a custom tag
-            a.set_tag("FG", 1)
-            a.set_tag("ED", edit_dist)
-            # IMPORTANT: ref_stop here is actually where the alignment STARTS
-            # This is due to the traceback perspective in the fragment_align function
-            # where 'stop' means where we stop tracing back (= start of alignment)
-            a.reference_start = ref_stop
-            # Replace with the better CIGAR from fragment alignment
-            a.cigar = cigar
-    
+        # Mark this as a fragment alignment with a custom tag
+        a.set_tag("FG", 1)
+        a.set_tag("ED", edit_dist)
+        # IMPORTANT: ref_stop here is actually where the alignment STARTS
+        # This is due to the traceback perspective in the fragment_align function
+        # where 'stop' means where we stop tracing back (= start of alignment)
+        a.reference_start = ref_stop
+        # Replace with the better CIGAR from fragment alignment
+        a.cigar = cigar
     
     # Return the completed alignment record, ready for output to BAM/SAM
     return a
