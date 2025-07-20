@@ -566,142 +566,95 @@ def check_fragment(cigar, reference_length, min_del_proportion=0.15):
 
 @njit(parallel=True, cache=True, fastmath=True)
 def smith_waterman_for_fragment(tRNA, fragment):
-    """Perform Smith-Waterman local alignment between a tRNA and fragment sequence.
+    """Perform Smith-Waterman local alignment with affine gap penalties.
     
-    Implements the Smith-Waterman dynamic programming algorithm to find the optimal
-    local alignment between two sequences. This implementation uses extended CIGAR
-    format codes that distinguish between matches and mismatches, providing more
-    detailed alignment information than standard CIGAR strings.
-    
-    The algorithm builds three matrices:
-    - score_mat: Tracks alignment scores at each position
-    - traceback_mat: Records which operation led to each score (for path reconstruction)
-    - length_mat: Counts the number of matching positions in the alignment
+    Simplified implementation that uses the traceback matrix itself to track
+    gap states, implementing affine penalties without needing separate state matrices.
     
     Args:
-        tRNA (str): The reference sequence (typically the longer sequence).
-                   In alignment terms, this is treated as the "reference".
-        fragment (str): The query sequence to align against the tRNA.
-                       Gaps in this sequence are insertions, gaps in tRNA are deletions.
+        tRNA (str): The reference sequence (typically the longer sequence)
+        fragment (str): The query sequence to align against the tRNA
     
     Returns:
-        tuple: A 5-element tuple containing:
-            - score_mat (np.ndarray): Complete scoring matrix of shape (tRNA_len+1, fragment_len+1)
-            - traceback_mat (np.ndarray): Matrix of traceback operations using extended CIGAR codes:
-                * -1: Stop/Start of alignment
-                * 7: Match (equivalent to '=' in extended CIGAR)
-                * 8: Mismatch (equivalent to 'X' in extended CIGAR)
-                * 3: Deletion (equivalent to 'D' in CIGAR) - base present in tRNA but not fragment
-                * 4: Insertion (equivalent to 'I' in CIGAR) - base present in fragment but not tRNA
-            - length_mat (np.ndarray): Matrix tracking number of matches in optimal path to each cell
-            - tRNA_start (int): Matrix row index where optimal alignment ends (1-indexed)
-            - frag_start (int): Matrix column index where optimal alignment ends (1-indexed)
-    
-    Note:
-        The returned positions (tRNA_start, frag_start) represent the END of the optimal
-        alignment in matrix coordinates. To get the actual sequence positions, subtract 1
-        from these values. The START of the alignment must be found through traceback.
+        tuple: (score_mat, traceback_mat, length_mat, tRNA_start, frag_start)
     """
-    # Scoring parameters for the alignment algorithm
-    # These values determine how the algorithm weighs matches, mismatches, and gaps
-    gap = -2            # Penalty for introducing a gap (insertion or deletion)
+    # Affine gap scoring parameters
+    gap_open = -6       # Penalty for opening a new gap (higher)
+    gap_extend = -1     # Penalty for extending an existing gap (lower)
     match_score = +3    # Reward for matching bases
     mismatch_score = -1 # Penalty for mismatched bases
     
-    # Get sequence lengths for matrix dimensioning
+    # Get sequence lengths
     tRNA_len = len(tRNA)
     fragment_len = len(fragment)
     
-    # Initialize the scoring matrix with zeros
-    # Extra row and column (hence +1) represent alignment with empty sequence
-    score_mat = np.zeros((tRNA_len+1, fragment_len+1), dtype = np.int32)
+    # Initialize matrices
+    score_mat = np.zeros((tRNA_len+1, fragment_len+1), dtype=np.float32)
+    traceback_mat = np.full((tRNA_len+1, fragment_len+1), -1, dtype=np.int8)
+    length_mat = np.zeros((tRNA_len+1, fragment_len+1), dtype=np.int32)
     
-    # Initialize traceback matrix with -1 (stop signal)
-    # This matrix records which operation gave the optimal score for each cell
-    # Using extended CIGAR format codes for more detailed alignment info:
-    # -1 = stop/start of alignment
-    # 7 = match ('=' in extended CIGAR)
-    # 8 = mismatch ('X' in extended CIGAR)  
-    # 3 = deletion ('D' in CIGAR) - base in tRNA but not in fragment
-    # 4 = insertion ('I' in CIGAR) - base in fragment but not in tRNA
-    traceback_mat = np.full((tRNA_len+1, fragment_len+1), -1, dtype = np.int8)
+
     
-    # Initialize matrix to track number of matching positions
-    # This helps evaluate alignment quality beyond just the score
-    length_mat = np.zeros((tRNA_len+1, fragment_len+1), dtype = np.int32)
-    
-    # Variables to track the cell with maximum score (best local alignment)
+    # Track best overall score and position
     max_score = 0
-    tRNA_start = 0  # Will store row index of best alignment end
-    frag_start = 0  # Will store column index of best alignment end
+    tRNA_start = 0
+    frag_start = 0
     
-    # Fill the matrices using dynamic programming
-    # i represents position in tRNA, j represents position in fragment
+    # Fill matrices using dynamic programming
     for i in range(1, tRNA_len + 1):
         for j in range(1, fragment_len + 1):
-            # Check if current positions match
-            # Note: i-1 and j-1 because matrix is 1-indexed but sequences are 0-indexed
-            is_match = False
-            if tRNA[i - 1] == fragment[j - 1]:
-                # Calculate score if we align these matching bases
-                diagonal_score = score_mat[i-1][j-1] + match_score  
-                is_match = True
+            # Option 1: Match/Mismatch (diagonal move)
+            is_match = tRNA[i-1] == fragment[j-1]
+            if is_match:
+                diagonal_score = score_mat[i-1][j-1] + match_score
             else:
-                # Calculate score if we align these mismatching bases
                 diagonal_score = score_mat[i-1][j-1] + mismatch_score
             
-            # Calculate score if we introduce a gap in tRNA (deletion from fragment's perspective)
-            # This means we're coming from the left cell (j-1)
-            deletion_score = score_mat[i][j-1] + gap
+            # Option 2: Deletion (horizontal move - gap in tRNA)
+            # Check if the cell we're coming from was reached by a deletion
+            if traceback_mat[i][j-1] == 2:  # Already in a deletion
+                deletion_score = score_mat[i][j-1] + gap_extend
+            else:  # Opening a new deletion
+                deletion_score = score_mat[i][j-1] + gap_open
             
-            # Calculate score if we introduce a gap in fragment (insertion from fragment's perspective)
-            # This means we're coming from the cell above (i-1)
-            insertion_score = score_mat[i-1][j] + gap
+            # Option 3: Insertion (vertical move - gap in fragment)
+            # Check if the cell we're coming from was reached by an insertion
+            if traceback_mat[i-1][j] == 1:  # Already in an insertion
+                insertion_score = score_mat[i-1][j] + gap_extend
+            else:  # Opening a new insertion
+                insertion_score = score_mat[i-1][j] + gap_open
             
-            # Choose the best scoring option
-            # The order of these conditions implements a tie-breaking strategy:
-            # diagonal > deletion > insertion when scores are equal
-            if (diagonal_score >= deletion_score and 
-                diagonal_score >= insertion_score and
-                diagonal_score >= 0):  # Smith-Waterman: can start new alignment if all options are negative
-                
-                score_mat[i][j] = diagonal_score
-                
+            # Choose the best option
+            best_score = max(0, diagonal_score, deletion_score, insertion_score)
+            score_mat[i][j] = best_score
+            
+            # Update traceback based on best option
+            if best_score == 0:
+                traceback_mat[i][j] = -1
+                length_mat[i][j] = 0
+            elif best_score == diagonal_score:
+                # Match/mismatch
                 if is_match:
-                    traceback_mat[i][j] = 7  # Extended CIGAR '=' for match
-                    length_mat[i][j] = length_mat[i-1][j-1] + 1  # Increment match count
+                    traceback_mat[i][j] = 7  # Match
+                    length_mat[i][j] = length_mat[i-1][j-1] + 1
                 else:
-                    traceback_mat[i][j] = 8  # Extended CIGAR 'X' for mismatch
-                    length_mat[i][j] = length_mat[i-1][j-1]  # Preserve match count (no increment)
-            
-            elif (deletion_score >= insertion_score and
-                  deletion_score >= 0):
-                
-                score_mat[i][j] = deletion_score
-                traceback_mat[i][j] = 2  # CIGAR 'D' - deletion relative to reference
-                # Coming from left cell, so copy its match count
+                    traceback_mat[i][j] = 8  # Mismatch
+                    length_mat[i][j] = length_mat[i-1][j-1]
+            elif best_score == deletion_score:
+                # Deletion (gap in tRNA)
+                traceback_mat[i][j] = 2
                 length_mat[i][j] = length_mat[i][j-1]
-            
-            elif (insertion_score >= 0):
-                
-                score_mat[i][j] = insertion_score
-                traceback_mat[i][j] = 1  # CIGAR 'I' - insertion relative to reference
-                # Coming from above cell, so copy its match count
+            else:
+                # Insertion (gap in fragment)
+                traceback_mat[i][j] = 1
                 length_mat[i][j] = length_mat[i-1][j]
             
-            else:
-                # All options are negative - start a new alignment here
-                score_mat[i][j] = 0
-                traceback_mat[i][j] = -1  # Mark as potential start position
-                length_mat[i][j] = 0      # New alignment has no matches yet
-            
-            # Track the highest scoring cell (best local alignment found so far)
-            # In case of ties, this keeps the last (bottom-right-most) occurrence
-            if score_mat[i][j] >= max_score:
-                max_score = score_mat[i][j]
-                tRNA_start = i  # Remember this is matrix coordinates (1-indexed)
-                frag_start = j  # Will need to subtract 1 for sequence position
-                
+            # Track overall best score
+            if best_score >= max_score:
+                max_score = best_score
+                tRNA_start = i
+                frag_start = j
+    
     return score_mat, traceback_mat, length_mat, tRNA_start, frag_start
     
 def edit_instructions_from_smith_waterman(traceback_mat, max_len, tRNA_start, frag_start):
@@ -896,7 +849,105 @@ def fragment_align(sub_sequence, ref_sequence, five_clip, three_clip):
     # This is backwards from intuition but consistent with the implementation
     return cigar, edit_dist, tRNA_start, tRNA_end, frag_start, frag_end
 
-
+def trim_cigar_to_matches(cigar_tuples):
+    """Trim CIGAR to start and end with matches.
+    
+    Any trimmed operations that consume query bases (mismatches, insertions,
+    soft clips) are converted to soft clips to maintain the correct query length.
+    
+    Example:
+        Input:  [(4,5), (2,6), (7,1), (2,1), (7,3), (2,32), (4,45)]
+                  5S      6D      1=      1D      3=      32D      45S
+        Output: [(4,5), (7,1), (2,1), (7,3), (4,45)], ref_shift=6
+        
+    The 6D at start is removed and ref_start shifts by 6.
+    The 32D at end is removed (no ref_start change).
+    
+    Args:
+        cigar_tuples: List of (operation, length) tuples (pysam format)
+        
+    CIGAR operation codes:
+        0 = M (alignment match - could be match or mismatch)
+        1 = I (insertion)
+        2 = D (deletion)
+        4 = S (soft clipping)
+        7 = = (sequence match, extended CIGAR)
+        8 = X (sequence mismatch, extended CIGAR)
+    
+    Returns:
+        tuple: (trimmed_cigar, ref_start_shift)
+            - trimmed_cigar: Updated CIGAR list with soft clips
+            - ref_start_shift: How many bases to add to reference_start
+    """
+    if not cigar_tuples:
+        return cigar_tuples, 0
+    
+    # Find first match
+    first_match = -1
+    for i, (op, length) in enumerate(cigar_tuples):
+        if op in (0, 7):  # Match (M or =)
+            first_match = i
+            break
+    
+    if first_match == -1:  # No matches found
+        return [], 0
+    
+    # Find last match
+    last_match = -1
+    for i in range(len(cigar_tuples) - 1, -1, -1):
+        if cigar_tuples[i][0] in (0, 7):  # Match (M or =)
+            last_match = i
+            break
+    
+    # Check if trimming is even needed
+    # If the first match is at the beginning (ignoring soft clips) and
+    # the last match is at the end (ignoring soft clips), no trimming needed
+    needs_trimming = False
+    
+    # Check start: anything before first match that's not a soft clip?
+    for i in range(first_match):
+        if cigar_tuples[i][0] != 4:  # Not a soft clip
+            needs_trimming = True
+            break
+    
+    # Check end: anything after last match that's not a soft clip?
+    for i in range(last_match + 1, len(cigar_tuples)):
+        if cigar_tuples[i][0] != 4:  # Not a soft clip
+            needs_trimming = True
+            break
+    
+    if not needs_trimming:
+        return cigar_tuples, 0
+    
+    # Count reference bases consumed before first match (deletions only)
+    # Also count ALL query bases that need to be soft-clipped
+    ref_start_shift = 0
+    extra_soft_clip_5 = 0
+    for i in range(first_match):
+        op, length = cigar_tuples[i]
+        if op == 2:  # Deletion
+            ref_start_shift += length
+        elif op in (1, 4, 8):  # Insertion, soft clip, mismatch
+            extra_soft_clip_5 += length
+        # Operation 0 (M) should not appear here if using extended CIGAR correctly
+    
+    # Count ALL query bases after last match that need to be soft-clipped
+    extra_soft_clip_3 = 0
+    for i in range(last_match + 1, len(cigar_tuples)):
+        op, length = cigar_tuples[i]
+        if op in (1, 4, 8):  # Insertion, soft clip, mismatch
+            extra_soft_clip_3 += length
+        # Operation 0 (M) should not appear here if using extended CIGAR correctly
+    
+    # Build final CIGAR
+    result = []
+    if extra_soft_clip_5 > 0:
+        result.append((4, extra_soft_clip_5))  # Soft clip
+    result.extend(cigar_tuples[first_match:last_match + 1])
+    if extra_soft_clip_3 > 0:
+        result.append((4, extra_soft_clip_3))  # Soft clip
+    
+    return result, ref_start_shift
 
 def align_read(
     pysam_read, inference_dict_read, ref_index, ref_sequence, secondary=False
@@ -1019,9 +1070,15 @@ def align_read(
         )
         
         if (cigar is None or 
-            (edit_dist > (ref_start-ref_stop) * 0.3)
+            edit_dist > (ref_start-ref_stop) * 0.3
            ):
             return pysam_read
+        
+        #print(f"pre-{cigar=}")
+        cigar, ref_shift = trim_cigar_to_matches(cigar)
+        ref_stop += ref_shift
+        #print(f"post-{cigar=}")
+        
             
         
         # If fragment alignment succeeded and is better than our original alignment
@@ -1035,6 +1092,12 @@ def align_read(
         a.reference_start = ref_stop
         # Replace with the better CIGAR from fragment alignment
         a.cigar = cigar
+        
+        if 15 > abs(a.reference_end - a.reference_start) - edit_dist:
+            return pysam_read
+    
+    elif (a.get_tag("ED") > len(ref_sequence) * 0.3):
+        return pysam_read
     
     # Return the completed alignment record, ready for output to BAM/SAM
     return a
