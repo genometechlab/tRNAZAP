@@ -13,13 +13,22 @@ from aligner.supporting_functions.supporting_functions import (
     make_sub_bam,
     process_ref,
     split_read_ids,
+    get_model_to_ref,
+    make_sort_params_list,
+    sort_bam,
+    merge_bam
+)
+
+from aligner.progress_monitoring.progress import (
+    create_shared_counter,
+    increment_counter,
+    create_monitor
 )
 
 from aligner.inference_functions.process_inference import load_inference_obj
 
 program_name = "tRNA_zap"
 version = "05_16_25_v0.1.2"
-
 
 def main(
     unaligned_bam, inference_list, out_dir, out_pre, threads, model, all_alignments
@@ -53,11 +62,7 @@ def main(
         work in parallel across the specified number of threads.
     """
     # Identifying the appropriate reference based on the model selected
-    model_to_ref = {
-        "human-mt": "./references/human-mt_reference.fa",
-        "yeast": "./references/human-mt_reference.fa",
-        "e_coli": "./references/human-mt_reference.fa",
-    }
+    model_to_ref = get_model_to_ref()
 
     # Attempt to load model path, if the model is not recognized print a help
     # message and terminate the program.
@@ -82,8 +87,12 @@ def main(
     # validation dataset it adds a ground truth label ('gt').
     inference_dict = load_inference_obj(inference_list)
 
-    splt_reads = split_read_ids(unaligned_bam, threads)
+    splt_reads = split_read_ids(inference_dict, threads)
 
+    monitor_counter = create_shared_counter()
+    monitor = create_monitor(monitor_counter.name, len(inference_dict))
+    monitor.start()
+    
     p_list = make_parameter_list(
         splt_reads,
         bam_header,
@@ -93,14 +102,33 @@ def main(
         out_dir,
         out_pre,
         all_alignments,
+        monitor_counter.name
     )
 
     with Pool(threads) as p:
         files = p.map(make_sub_bam, p_list)
 
+    print("Finished Aligning")
+    print(f"Monitor alive before join: {monitor.is_alive()}")
+    monitor.join(timeout=5)
+    print(f"Monitor alive after join: {monitor.is_alive()}")
+    if monitor.is_alive():
+        print("WARNING: Monitor thread still running!")
+    monitor_counter.close()
+    monitor_counter.unlink()
+    
     print(files)
 
-    # Add sorting indexing merging
+    sort_p_list = make_sort_params_list(
+        files, 
+        out_dir, 
+        out_pre, 
+        threads)
+    
+    with Pool(threads) as p:
+        files = p.map(sort_bam, sort_p_list)
+
+    merge_bam(files, out_dir, out_pre, threads)
 
 
 if __name__ == "__main__":
@@ -119,7 +147,7 @@ if __name__ == "__main__":
         "-i",
         type=str,
         required=True,
-        nargs="*",
+        nargs='*',
         help="tRNA model inference results, multiple inference files can be provided"
         + " such as from the results of mulitple sequencing runs",
     )

@@ -1,18 +1,55 @@
 """Module for processing tRNA model inference output."""
 from splitter.storages.inference_results import InferenceResults
+from splitter import ModelConfig, ModelLoader, Inference, ResultsVisualizer, ZIRReader
+import torch
+import os
 
-def load_inference_obj(inference_path_list):
+
+#TODO: Fix the logic for loading files
+
+def load_inference_obj(inference_path):
     """
     Read in the pickled inference object(s).
 
     params:
-        inference_path_list: list of paths to pickled results from the
-        inference step
-        ref_dict: Dictionary of numeric tRNA reference code keys with sequence
-        and name information.
-
+        inference_path: Either a dir with .zir files or a single .zir file
+        
     return: A dictionary for each read in the dataset.
     """
-    #For now just load one inference_object
-    inference_obj = InferenceResults.load(inference_path_list)
+
+    if os.path.isdir(inference_path[0]):
+        return from_dir(inference_path[0])
+    else:
+        return from_files(inference_path)
+
+def from_files(inference_path_list):
+    inference_obj={}
+    for pth in inference_path_list:
+        with ZIRReader(pth, index=False) as zip_reader:
+            lbls_to_cls = zip_reader.metadata.label_names
+            for read_result in zip_reader:
+                variable_region = read_result.variable_region_range
+                cls_ = lbls_to_cls[str(read_result.classification_pred)]
+                inference_obj[read_result.read_id] = (cls_, variable_region)
+            if len(inference_obj) >= 1000000:
+                break
     return inference_obj
+
+def from_dir(dir_path):
+    files = [f for f in os.listdir(dir_path) if f[-4:] == ".zir"]
+    print(files)
+    inference_obj = {}
+    for i, pth in enumerate(files):
+        pth = os.path.join(dir_path, pth)
+        print(pth)
+        with ZIRReader(pth, index=False) as zip_reader:
+            lbls_to_cls = zip_reader.metadata.label_names
+            for read_result in zip_reader:
+                variable_region = read_result.variable_region_range
+                cls_ = lbls_to_cls[str(read_result.classification_pred)]
+                inference_obj[read_result.read_id] = (cls_, variable_region)
+                if len(inference_obj) >= 1000000 * (i+1):
+                    break
+    return inference_obj
+        
+        
