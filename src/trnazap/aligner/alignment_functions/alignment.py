@@ -489,7 +489,7 @@ def identity_from_cigar(cigar_tuples):
 
     return matches / total_align_length
 
-
+#Could be njit if we preprocess the pysam read parts?
 def subset_sequence(pysam_read, trna_indices):
     """
     Extract the tRNA portion of a sequence based on model inference indices.
