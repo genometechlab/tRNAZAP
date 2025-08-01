@@ -20,7 +20,7 @@ PathLike = Union[str, Path, os.PathLike]
 
 
 class ZIRReader:
-    """Read inference results from one or more ZIR archive files."""
+    """Read inference results from one or more ZIR archive files with dynamic logit support."""
 
     def __init__(self, paths: Union[Path, List[Path]], index: bool = False):
         self._paths: List[Path] = sorted(
@@ -100,13 +100,16 @@ class ZIRReader:
         return self._parse_record(data)
 
     def _parse_record(self, data: bytes) -> "ReadResult":
+        """Parse record with dynamic logit support."""
         offset = 0
 
+        # Read ID
         read_id_len = struct.unpack_from('<H', data, offset)[0]
         offset += 2
         read_id = data[offset:offset + read_id_len].decode('utf-8')
         offset += read_id_len
 
+        # Basic metadata
         num_chunks = struct.unpack_from('<i', data, offset)[0]
         offset += 4
         chunk_size = struct.unpack_from('<i', data, offset)[0]
@@ -114,20 +117,61 @@ class ZIRReader:
 
         logits = {}
 
-        has_cls = struct.unpack_from('<B', data, offset)[0]
-        offset += 1
-        if has_cls:
-            length = struct.unpack_from('<I', data, offset)[0]
-            offset += 4
-            logits['seq_class'] = np.frombuffer(data, dtype='float32', count=length, offset=offset)
-            offset += length * 4
+        # Check if this is the new format (has logit count) or old format
+        # We can detect by checking if the next byte is reasonable
+        next_byte = struct.unpack_from('<B', data, offset)[0]
+        
+        if next_byte <= 20:  # Reasonable number of logit keys (new format)
+            # NEW FORMAT: Read dynamic logits
+            num_logits = next_byte
+            offset += 1
+            
+            for _ in range(num_logits):
+                # Read key name
+                key_len = struct.unpack_from('<B', data, offset)[0]
+                offset += 1
+                key = data[offset:offset + key_len].decode('utf-8')
+                offset += key_len
+                
+                # Read array info
+                ndim = struct.unpack_from('<B', data, offset)[0]
+                offset += 1
+                
+                # Read shape
+                shape = []
+                for _ in range(ndim):
+                    dim = struct.unpack_from('<I', data, offset)[0]
+                    shape.append(dim)
+                    offset += 4
+                
+                # Read data
+                total_elements = np.prod(shape) if shape else 1
+                array = np.frombuffer(data, dtype='float32', count=total_elements, offset=offset)
+                if shape:
+                    array = array.reshape(shape)
+                
+                logits[key] = array
+                offset += total_elements * 4
+                
+        else:
+            # OLD FORMAT: Handle legacy classification/segmentation format
+            # Reset and read using old logic
+            offset -= 1  # Go back one byte
+            
+            has_cls = struct.unpack_from('<B', data, offset)[0]
+            offset += 1
+            if has_cls:
+                length = struct.unpack_from('<I', data, offset)[0]
+                offset += 4
+                logits['seq_class'] = np.frombuffer(data, dtype='float32', count=length, offset=offset)
+                offset += length * 4
 
-        has_seq = struct.unpack_from('<B', data, offset)[0]
-        offset += 1
-        if has_seq:
-            T, D = struct.unpack_from('<II', data, offset)
-            offset += 8
-            logits['seq2seq'] = np.frombuffer(data, dtype='float32', count=T * D, offset=offset).reshape((T, D))
+            has_seq = struct.unpack_from('<B', data, offset)[0]
+            offset += 1
+            if has_seq:
+                T, D = struct.unpack_from('<II', data, offset)
+                offset += 8
+                logits['seq2seq'] = np.frombuffer(data, dtype='float32', count=T * D, offset=offset).reshape((T, D))
 
         from ...storages import ReadResult
         return ReadResult(read_id=read_id, _logits=logits, num_chunks=num_chunks, chunk_size=chunk_size)
@@ -174,7 +218,8 @@ class ZIRReader:
 
     def _check_metadata_compatibility(self, metas: List[Dict[str, Any]]):
         ref = metas[0]
-        must_match = ['model_name', 'model_type', 'chunk_size', 'num_classes', 'num_classes_seq2seq', 'max_seq_len']
+        must_match = ['model_name', 'model_type', 'chunk_size']
+        # Removed 'num_classes', 'num_classes_seq2seq' as these might not exist with dynamic logits
 
         for i, meta in enumerate(metas[1:], 1):
             for field in must_match:

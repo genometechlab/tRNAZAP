@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 
 class ZIRWriter:
-    """Write inference results to ZIR archive format."""
+    """Write inference results to ZIR archive format with dynamic logit support."""
     
     def __init__(self, path: Path, metadata: 'InferenceMetadata'):
         """
@@ -117,6 +117,8 @@ class ZIRWriter:
     def _serialize_result(self, read_result):
         """
         Serialize result into a byte buffer (before compression).
+        Now supports dynamic logit keys.
+        
         Returns:
             bytes: uncompressed binary data for a single record
         """
@@ -131,23 +133,26 @@ class ZIRWriter:
         buffer.extend(struct.pack('<i', read_result.num_chunks))  # 4 bytes
         buffer.extend(struct.pack('<i', read_result.chunk_size))  # 4 bytes
         
-        # Write classification logits if present
-        if read_result.classification_logits is not None:
-            buffer.extend(struct.pack('<B', 1))  # Has classification flag
-            cls_array = read_result.classification_logits.astype('float32')
-            buffer.extend(struct.pack('<I', len(cls_array)))  # Array length
-            buffer.extend(cls_array.tobytes())
-        else:
-            buffer.extend(struct.pack('<B', 0))  # No classification flag
+        # NEW: Write number of logit entries
+        logit_entries = read_result._logits
+        buffer.extend(struct.pack('<B', len(logit_entries)))  # 1 byte for count (max 255 tasks)
         
-        # Write seq2seq logits if present
-        if read_result.seq2seq_logits is not None:
-            buffer.extend(struct.pack('<B', 1))  # Has seq2seq flag
-            seq_array = read_result.seq2seq_logits.astype('float32')
-            shape = seq_array.shape
-            buffer.extend(struct.pack('<II', shape[0], shape[1]))  # Shape (T, 4)
-            buffer.extend(seq_array.tobytes())
-        else:
-            buffer.extend(struct.pack('<B', 0))  # No seq2seq flag
-
+        # Write each logit entry dynamically
+        for key, logits in logit_entries.items():
+            # Write key name
+            key_bytes = key.encode('utf-8')
+            buffer.extend(struct.pack('<B', len(key_bytes)))  # 1 byte for key length
+            buffer.extend(key_bytes)
+            
+            # Write array info
+            array = logits.astype('float32')
+            buffer.extend(struct.pack('<B', array.ndim))  # 1 byte for number of dimensions
+            
+            # Write shape
+            for dim in array.shape:
+                buffer.extend(struct.pack('<I', dim))  # 4 bytes per dimension
+            
+            # Write data
+            buffer.extend(array.tobytes())
+        
         return bytes(buffer)
