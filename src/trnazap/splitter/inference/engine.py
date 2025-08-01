@@ -134,12 +134,13 @@ class Inference:
                     if read_ids
                     else reader.reads()
                 )
+                print(reads_iter)
                 if show_progress:
                     reads_iter = tqdm.tqdm(
                         reads_iter,
                         desc="Reading",
                         total=len(read_ids) if read_ids else None,
-                        leave=False,
+                        leave=True,
                     )
 
                 for rec in reads_iter:
@@ -189,10 +190,10 @@ class Inference:
 
         for i, read_id in enumerate(batch_t["metadata"]["read_id"]):
             num_chunks = int(batch_t["metadata"]["num_tokens"][i])
-            logits = dict(
-                seq_class=outputs["seq_class"][i].cpu().numpy(),
-                seq2seq=outputs["seq2seq"][i].cpu().numpy()[:num_chunks],
-            )
+            logits = {
+                k:v[i].cpu().numpy()
+                for k, v in outputs.items()
+            }
             results._add(read_id=read_id, logits=logits, num_chunks=num_chunks)
 
     # ---------- record-level helpers ---------------------------------------
