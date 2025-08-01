@@ -106,6 +106,6 @@ class TransformerZAM_multitask(nn.Module):
         token_logits = self.token_classifier(token_representation)
 
         return {
-            "seq_class": seq_logits,
-            "seq2seq": token_logits
+            "classification": seq_logits,
+            "segmentation": token_logits
         }
