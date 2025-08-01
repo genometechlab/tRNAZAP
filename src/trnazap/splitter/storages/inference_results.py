@@ -4,6 +4,7 @@ InferenceResults class for storing all inference results with metadata.
 
 from typing import Dict, List, Optional, Iterator, Tuple, Union, Any
 from pathlib import Path
+from dataclasses import dataclass, field
 import pickle
 import numpy as np
 import logging
@@ -13,8 +14,8 @@ import json
 
 from .read_results import ReadResult
 from .inference_metadata import InferenceMetadata
-from ..io import MultiLoadMixin
 from ..utils import PathSet
+from ..io import ZIRWriter, ZIRShardManager
 
 logger = logging.getLogger(__name__)
 
@@ -22,28 +23,18 @@ logger = logging.getLogger(__name__)
 # InferenceResults Container
 # =============================================================================
 
-class InferenceResults(MultiLoadMixin):
+@dataclass
+class InferenceResults:
     """Container for all inference results with metadata."""
 
-    # -------------------------------------------------------------------------
-    # Initialization
-    # -------------------------------------------------------------------------
-
-    def __init__(self, metadata: InferenceMetadata):
-        """
-        Initialize with metadata.
-
-        Args:
-            metadata: Inference metadata containing model and run configuration
-        """
-        self.metadata = metadata
-        self._results: Dict[str, ReadResult] = {}
+    metadata: InferenceMetadata
+    _results: Dict[str, ReadResult] = field(default_factory=dict)
 
     # -------------------------------------------------------------------------
     # Core Methods
     # -------------------------------------------------------------------------
 
-    def _add_result(self, read_result: ReadResult) -> None:
+    def add_read_result(self, read_result: ReadResult) -> None:
         """
         Add a ReadResult object.
 
@@ -53,7 +44,7 @@ class InferenceResults(MultiLoadMixin):
         self._results[read_result.read_id] = read_result
         self.metadata.num_reads_processed = len(self._results)
 
-    def _add(self, read_id: str, logits: Dict[str, np.ndarray], num_chunks: int) -> None:
+    def add(self, read_id: str, logits: Dict[str, np.ndarray], num_chunks: int) -> None:
         """
         Add a result for a read.
 
@@ -119,6 +110,9 @@ class InferenceResults(MultiLoadMixin):
     def __iter__(self) -> Iterator[str]:
         """Iterate over read IDs."""
         return iter(self._results)
+    
+    def __bool__(self) -> bool:
+        return True
 
     def items(self) -> Iterator[Tuple[str, ReadResult]]:
         """Iterate over (read_id, ReadResult) pairs."""
@@ -136,58 +130,23 @@ class InferenceResults(MultiLoadMixin):
     # I/O Methods
     # -------------------------------------------------------------------------
     
-    def _to_parquet_records(self) -> Tuple[List[Dict], Dict[str, Any]]:
-        """Convert to records for Parquet storage."""
-        from dataclasses import asdict
+    def save_zir(self, path: Union[str, Path], shard_size: Optional[int] = None) -> Path:
+        """Save results to ZIR format."""
+        path = Path(path)
         
-        records = []
-        for read_id, result in self._results.items():
-            result_records, _ = result._to_parquet_records()
-            records.extend(result_records)
-        
-        metadata_dict = asdict(self.metadata)
-        if metadata_dict.get('pod5_paths') is not None:
-            metadata_dict['pod5_paths'] = list(metadata_dict['pod5_paths'])
-        
-        metadata = {
-            'inference_metadata': metadata_dict,
-            'format_version': '2.0',
-            'num_results': len(self._results)
-        }
-        
-        return records, metadata
-    
-    @classmethod
-    def _from_parquet_records(cls, records: List[Dict], metadata: Dict[str, Any]) -> "InferenceResults":
-        """Reconstruct from Parquet records."""
-        metadata_dict = metadata['inference_metadata']
-        if metadata_dict.get('pod5_paths') is not None:
-            metadata_dict['pod5_paths'] = list(metadata_dict['pod5_paths'])
-        
-        inference_metadata = InferenceMetadata(**metadata_dict)
-        result = cls(metadata=inference_metadata)
-        
-        for record in records:
-            read_result = ReadResult._from_parquet_records([record], {})
-            result._add_result(read_result)
-        
-        return result
-    
-    def _to_zir(self, path: Path) -> None:
-        """Internal method to save as ZIR archive."""
-        from ..io.archive import ZIRWriter
-        
-        with ZIRWriter(path, self.metadata) as writer:
-            for result in self.values():
-                writer.add_result(result)
-    
-    @classmethod
-    def _from_zir(cls, path: Path) -> "InferenceResults":
-        """Internal method to load from ZIR archive."""
-        from ..io.archive import ZIRReader
-        
-        with ZIRReader(path) as reader:
-            return reader.to_inference_results()
+        if shard_size is None:
+            # Single file
+            with ZIRWriter(path, self.metadata) as writer:
+                for result in self._results.values():
+                    writer.add_result(result)
+            return path
+        else:
+            # Sharded
+            manager = ZIRShardManager(path, self.metadata, shard_size)
+            for result in self._results.values():
+                manager.add_result(result)
+            manager.close()
+            return path.parent
 
     # -------------------------------------------------------------------------
     # Utility

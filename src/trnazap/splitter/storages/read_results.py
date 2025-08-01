@@ -10,8 +10,6 @@ from typing import Union, Optional, Dict, List, Tuple, Any, TYPE_CHECKING
 from dataclasses import dataclass
 import logging
 
-from ..io import SaveLoadMixin
-
 if TYPE_CHECKING:
     from .inference_results import InferenceResults
     from .inference_metadata import InferenceMetadata
@@ -19,7 +17,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 @dataclass
-class ReadResult(SaveLoadMixin):
+class ReadResult:
     """Results for a single read."""
 
     read_id: str
@@ -198,46 +196,6 @@ class ReadResult(SaveLoadMixin):
     # ------------------------------------------------------------------------
     # I/O
     # ------------------------------------------------------------------------
-    
-    def _to_parquet_records(self) -> Tuple[List[Dict], Dict[str, Any]]:
-        """Convert to records for Parquet storage."""
-        import numpy as np
-        
-        segmentation_flat = self.segmentation_logits.flatten() if self.segmentation_logits is not None else np.array([])
-        classification_flat = self.classification_logits.flatten() if self.classification_logits is not None else np.array([])
-        
-        record = {
-            'read_id': self.read_id,
-            'segmentation_flat': segmentation_flat,
-            'segmentation_shape': list(self.segmentation_logits.shape) if self.segmentation_logits is not None else [],
-            'classification_flat': classification_flat,
-            'classification_shape': list(self.classification_logits.shape) if self.classification_logits is not None else [],
-            'num_chunks': self.num_chunks,
-            'chunk_size': self.chunk_size
-        }
-        
-        metadata = {'format_version': '1.0'}
-        return [record], metadata
-    
-    @classmethod
-    def _from_parquet_records(cls, records: List[Dict], metadata: Dict[str, Any]) -> "ReadResult":
-        """Reconstruct from Parquet records."""
-        import numpy as np
-        
-        record = records[0]
-        logits = {}
-        
-        if record['segmentation_shape']:
-            logits['segmentation'] = np.array(record['segmentation_flat']).reshape(record['segmentation_shape'])
-        if record['classification_shape']:
-            logits['classification'] = np.array(record['classification_flat']).reshape(record['classification_shape'])
-        
-        return cls(
-            read_id=record['read_id'],
-            _logits=logits,
-            num_chunks=record['num_chunks'],
-            chunk_size=record['chunk_size']
-        )
 
     # ------------------------------------------------------------------------
     # String representation
