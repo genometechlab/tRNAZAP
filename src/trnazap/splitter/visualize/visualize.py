@@ -109,13 +109,13 @@ class ResultsVisualizer:
     ) -> plt.Figure:
         
         read_result = self.results[read_id]
-        logits = read_result.seq2seq_logits
-        probabilities = read_result.seq2seq_probs
-        predictions = read_result.seq2seq_preds
+        logits = read_result.segmentation_logits
+        probabilities = read_result.segmentation_probs
+        predictions = read_result.segmentation_preds
         chunk_size = self.results.metadata.chunk_size
 
         if logits is None:
-            raise ValueError(f"No seq2seq logits found for read {read_id}")
+            raise ValueError(f"No segmentation logits found for read {read_id}")
 
         signal_scaled = self._prepare_signal(signal)
 
