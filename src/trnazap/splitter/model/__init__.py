@@ -1,3 +1,4 @@
 from .transformer_multitask_zam import TransformerZAM_multitask
+from .transformer_multitask_zam_frag import TransformerZAM_multitask_wfrag
 from .factory.positional_encodings import *
 from .factory.transformer_encoder import TransformerEncoderWrapper
