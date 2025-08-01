@@ -1,4 +1,4 @@
-from .archive_writer import ZIRWriter
+from .archive_writer import ZIRWriter, ZIRShardManager
 from .archive_reader import ZIRReader
 from .archive_format import (
     MAGIC_BYTES,

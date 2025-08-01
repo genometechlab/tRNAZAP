@@ -26,6 +26,8 @@ class ZIRReader:
         self._paths: List[Path] = sorted(
             self._collect_dataset(paths, recursive=True, pattern='*.zir', threads=4)
         )
+        if not self._paths:
+            raise ValueError(f"No ZIR file was found")
         self.is_multi = len(self._paths) > 1
 
         self._files = []
