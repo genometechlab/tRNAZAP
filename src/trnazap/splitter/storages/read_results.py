@@ -1,5 +1,5 @@
 """
-ReadResult class with dynamic property generation for arbitrary logit keys.
+ReadResult class for storing individual read inference results.
 """
 
 import torch
@@ -18,166 +18,131 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-
-def _create_logits_property(key: str):
-    """Factory function to create a logits property getter for a specific key."""
-    def getter(self) -> Optional[np.ndarray]:
-        if key not in self._logits:
-            raise KeyError(f"The model did not output {key} logits")
-        logits = self._logits[key]
-        # Apply trimming for seq2seq-like outputs (2D arrays)
-        if logits.ndim == 2 and hasattr(self, 'num_chunks'):
-            return logits[:self.num_chunks]
-        return logits
-    return property(getter)
-
-
-def _create_probs_property(key: str):
-    """Factory function to create a probs property getter for a specific key."""
-    def getter(self) -> Optional[np.ndarray]:
-        if key in self._logits and self._logits[key] is not None:
-            from scipy.special import softmax
-            return softmax(self._logits[key], axis=-1)
-        return None
-    return property(getter)
-
-
-def _create_preds_property(key: str):
-    """Factory function to create a predictions property getter for a specific key."""
-    def getter(self) -> Optional[Union[int, np.ndarray]]:
-        if key in self._logits and self._logits[key] is not None:
-            preds = np.argmax(self._logits[key], axis=-1)
-            # Return int for 1D outputs (classification), array for 2D (seq2seq)
-            if self._logits[key].ndim == 1:
-                return int(preds)
-            return preds
-        return None
-    return property(getter)
-
-
-class DynamicPropertiesMeta(type):
-    """Metaclass that dynamically creates properties based on logit keys."""
-    
-    def __call__(cls, *args, **kwargs):
-        # Create the instance
-        instance = super().__call__(*args, **kwargs)
-        
-        # Dynamically add properties based on _logits keys
-        for key in instance._logits.keys():
-            # Create property names
-            logits_prop = f"{key}_logits"
-            probs_prop = f"{key}_probs"
-            preds_prop = f"{key}_preds"
-            
-            # Add properties to the instance's class
-            if not hasattr(instance.__class__, logits_prop):
-                setattr(instance.__class__, logits_prop, _create_logits_property(key))
-            if not hasattr(instance.__class__, probs_prop):
-                setattr(instance.__class__, probs_prop, _create_probs_property(key))
-            if not hasattr(instance.__class__, preds_prop):
-                setattr(instance.__class__, preds_prop, _create_preds_property(key))
-        
-        return instance
-
-
 @dataclass
-class ReadResult(SaveLoadMixin, metaclass=DynamicPropertiesMeta):
-    """Results for a single read with dynamic property generation."""
+class ReadResult(SaveLoadMixin):
+    """Results for a single read."""
 
     read_id: str
-    _logits: Dict[str, np.ndarray]  # Can have any keys
+    _logits: Dict[str, np.ndarray]  # e.g., {'segmentation': array, 'classification': array, 'frag': array}
     num_chunks: int
     chunk_size: int
 
     def __post_init__(self):
-        """Validate logits shapes based on common patterns."""
-        for key, logits in self._logits.items():
-            if logits.ndim not in [1, 2]:
-                raise ValueError(f"{key} logits must be 1D or 2D, got shape {logits.shape}")
+        """Validate logits shapes."""
+        if self.segmentation_logits is not None:
+            if self.segmentation_logits.ndim != 2:
+                raise ValueError(f"segmentation_logits must be 2D, got shape {self.segmentation_logits.shape}")
+        if self.classification_logits is not None:
+            if self.classification_logits.ndim != 1:
+                raise ValueError(f"classification_logits must be 1D, got shape {self.classification_logits.shape}")
 
     # ------------------------------------------------------------------------
-    # Aggregate properties that work with any keys
+    # Internal raw logits
     # ------------------------------------------------------------------------
 
     @property
     def logits(self) -> Dict[str, np.ndarray]:
-        """Get all raw logits."""
-        result = {}
-        for key in self._logits:
-            # Apply trimming for 2D arrays
-            if self._logits[key].ndim == 2:
-                result[key] = self._logits[key][:self.num_chunks]
-            else:
-                result[key] = self._logits[key]
-        return result
+        """Get raw logits."""
+        return {
+            "classification": self.classification_logits,
+            "segmentation": self.segmentation_logits,
+            "fragmentation": self.fragmentation_logits,
+        }
+        
+    @property
+    def fragmentation_logits(self) -> Optional[np.ndarray]:
+        """Get segmentation logits, trimmed by the number of chunks."""
+        if "fragmentation" in self._logits:
+            return self._logits.get('fragmentation')[:self.num_chunks]
+        else:
+            return None
+
+    @property
+    def segmentation_logits(self) -> Optional[np.ndarray]:
+        """Get segmentation logits, trimmed by the number of chunks."""
+        if "segmentation" in self._logits:
+            return self._logits.get('segmentation')[:self.num_chunks]
+        else:
+            raise None
+
+    @property
+    def classification_logits(self) -> Optional[np.ndarray]:
+        """Get classification logits."""
+        if "classification" in self._logits:
+            return self._logits.get('classification')
+        else:
+            raise None
+
+    # ------------------------------------------------------------------------
+    # Probabilities (softmax outputs)
+    # ------------------------------------------------------------------------
 
     @property
     def probs(self) -> Dict[str, Optional[np.ndarray]]:
         """Get probabilities for all tasks."""
-        from scipy.special import softmax
         return {
-            key: softmax(logits, axis=-1) if logits is not None else None
-            for key, logits in self.logits.items()
+            "classification": self.classification_probs,
+            "segmentation": self.segmentation_probs,
+            "fragmentation": self.fragmentation_probs,
         }
 
     @property
-    def preds(self) -> Dict[str, Union[int, np.ndarray]]:
-        """Get predictions for all tasks."""
-        result = {}
-        for key, logits in self.logits.items():
-            if logits is not None:
-                preds = np.argmax(logits, axis=-1)
-                # Return int for 1D outputs, array for 2D
-                result[key] = int(preds) if logits.ndim == 1 else preds
-            else:
-                result[key] = None
-        return result
-
-    # ------------------------------------------------------------------------
-    # Backwards compatibility properties
-    # ------------------------------------------------------------------------
-
-    @property
-    def seq2seq_logits(self) -> Optional[np.ndarray]:
-        """Backwards compatibility for seq2seq_logits."""
-        if hasattr(self, '_seq2seq_logits_cached'):
-            return self._seq2seq_logits_cached
-        return self._logits.get('seq2seq', None)
-
-    @property
-    def classification_logits(self) -> Optional[np.ndarray]:
-        """Backwards compatibility for classification_logits."""
-        if hasattr(self, '_seq_class_logits_cached'):
-            return self._seq_class_logits_cached
-        return self._logits.get('seq_class', None)
-
-    @property
-    def seq2seq_probs(self) -> Optional[np.ndarray]:
-        """Backwards compatibility for seq2seq_probs."""
-        if hasattr(self, '_seq2seq_probs_cached'):
-            return self._seq2seq_probs_cached
-        return self.probs.get('seq2seq', None)
+    def segmentation_probs(self) -> Optional[np.ndarray]:
+        """Get segmentation probabilities."""
+        if 'segmentation' in self._logits and self._logits['segmentation'] is not None:
+            from scipy.special import softmax
+            return softmax(self.segmentation_logits, axis=-1)
+        return None
 
     @property
     def classification_probs(self) -> Optional[np.ndarray]:
-        """Backwards compatibility for classification_probs."""
-        if hasattr(self, '_seq_class_probs_cached'):
-            return self._seq_class_probs_cached
-        return self.probs.get('seq_class', None)
+        """Get classification probabilities."""
+        if 'classification' in self._logits and self._logits['classification'] is not None:
+            from scipy.special import softmax
+            return softmax(self.classification_logits, axis=-1)
+        return None
+    
+    @property
+    def fragmentation_probs(self) -> Optional[np.ndarray]:
+        """Get fragmentation probabilities."""
+        if 'fragmentations' in self._logits and self._logits['fragmentations'] is not None:
+            from scipy.special import softmax
+            return softmax(self.fragmentation_logits, axis=-1)
+        return None
+
+    # ------------------------------------------------------------------------
+    # Predictions (argmax of probabilities)
+    # ------------------------------------------------------------------------
 
     @property
-    def seq2seq_preds(self) -> Optional[np.ndarray]:
-        """Backwards compatibility for seq2seq_preds."""
-        if hasattr(self, '_seq2seq_preds_cached'):
-            return self._seq2seq_preds_cached
-        return self.preds.get('seq2seq', None)
+    def preds(self) ->  Dict[str, Union[int, np.ndarray]]:
+        """Get predictions for all tasks."""
+        return {
+            "classification": self.classification_pred,
+            "segmentation": self.segmentation_preds,
+            "fragmentation": self.fragmentation_pred,
+        }
+
+    @property
+    def segmentation_preds(self) -> Optional[np.ndarray]:
+        """Get segmentation predictions as indices."""
+        if self.segmentation_logits is not None:
+            return np.argmax(self.segmentation_logits, axis=-1)
+        return None
 
     @property
     def classification_pred(self) -> Optional[int]:
-        """Backwards compatibility for classification_pred."""
-        if hasattr(self, '_seq_class_preds_cached'):
-            return self._seq_class_preds_cached
-        return self.preds.get('seq_class', None)
+        """Get classification prediction (argmax index)."""
+        if self.classification_logits is not None:
+            return int(np.argmax(self.classification_logits))
+        return None
+    
+    @property
+    def fragmentation_pred(self) -> Optional[int]:
+        """Get classification prediction (argmax index)."""
+        if self.fragmentation_logits is not None:
+            return int(np.argmax(self.fragmentation_logits))
+        return None
 
     # ------------------------------------------------------------------------
     # Region detection & smoothing
@@ -189,13 +154,13 @@ class ReadResult(SaveLoadMixin, metaclass=DynamicPropertiesMeta):
         preds = self.segmentation_preds
         return self._locate_region_of_interest(preds, 0)
 
-    def get_smoothed_segments(
+    def get_smoothed_segmentation_preds(
         self,
         device: Union[torch.device, str] = 'cpu',
         return_variable_region_range: bool = False
     ) -> Optional[Union[np.ndarray, tuple]]:
         """Apply CRF smoothing to segmentation predictions."""
-        if self.segmentation_logits is not None:
+        if self.segmentation_probs is not None:
             try:
                 from ..utils import crf_smoothing
                 predictions_smooth = crf_smoothing(self.segmentation_logits, device=device)
@@ -217,6 +182,7 @@ class ReadResult(SaveLoadMixin, metaclass=DynamicPropertiesMeta):
             return (start_*self.chunk_size, end_*self.chunk_size)
         return (-1, -1)
 
+
     # ------------------------------------------------------------------------
     # Utilities
     # ------------------------------------------------------------------------
@@ -229,29 +195,28 @@ class ReadResult(SaveLoadMixin, metaclass=DynamicPropertiesMeta):
             chunk_size=self.chunk_size
         )
     
-    def get_available_tasks(self) -> List[str]:
-        """Get list of available task keys."""
-        return list(self._logits.keys())
-    
     # ------------------------------------------------------------------------
-    # I/O - Updated to handle arbitrary keys
+    # I/O
     # ------------------------------------------------------------------------
     
     def _to_parquet_records(self) -> Tuple[List[Dict], Dict[str, Any]]:
         """Convert to records for Parquet storage."""
+        import numpy as np
+        
+        segmentation_flat = self.segmentation_logits.flatten() if self.segmentation_logits is not None else np.array([])
+        classification_flat = self.classification_logits.flatten() if self.classification_logits is not None else np.array([])
+        
         record = {
             'read_id': self.read_id,
+            'segmentation_flat': segmentation_flat,
+            'segmentation_shape': list(self.segmentation_logits.shape) if self.segmentation_logits is not None else [],
+            'classification_flat': classification_flat,
+            'classification_shape': list(self.classification_logits.shape) if self.classification_logits is not None else [],
             'num_chunks': self.num_chunks,
-            'chunk_size': self.chunk_size,
-            'logit_keys': list(self._logits.keys())
+            'chunk_size': self.chunk_size
         }
         
-        # Flatten each logit array and store with shape
-        for key, logits in self._logits.items():
-            record[f'{key}_flat'] = logits.flatten()
-            record[f'{key}_shape'] = list(logits.shape)
-        
-        metadata = {'format_version': '2.0'}  # Updated version
+        metadata = {'format_version': '1.0'}
         return [record], metadata
     
     @classmethod
@@ -262,12 +227,10 @@ class ReadResult(SaveLoadMixin, metaclass=DynamicPropertiesMeta):
         record = records[0]
         logits = {}
         
-        # Reconstruct logits from flattened arrays
-        for key in record['logit_keys']:
-            flat_key = f'{key}_flat'
-            shape_key = f'{key}_shape'
-            if flat_key in record and shape_key in record:
-                logits[key] = np.array(record[flat_key]).reshape(record[shape_key])
+        if record['segmentation_shape']:
+            logits['segmentation'] = np.array(record['segmentation_flat']).reshape(record['segmentation_shape'])
+        if record['classification_shape']:
+            logits['classification'] = np.array(record['classification_flat']).reshape(record['classification_shape'])
         
         return cls(
             read_id=record['read_id'],
