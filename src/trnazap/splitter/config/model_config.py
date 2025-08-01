@@ -1,19 +1,23 @@
 import os
 import glob
 import torch
+import torch.nn as nn
 from dataclasses import dataclass, field, fields, MISSING
-from typing import Optional, Dict, Any, Union
+from typing import Optional, Dict, Any, Union, Protocol
 import yaml
 import json
 import warnings
+import importlib
 
 from pathlib import Path
-from ..model import TransformerZAM_multitask
 from ..utils import load_weights
 
 
 PathLike = Union[str, Path]
 
+class ModelProtocol(Protocol):
+    def forward(self, *args, **kwargs):...
+    
 @dataclass
 class ModelConfig:
     """Configuration class for TransformerZAM model parameters."""
@@ -139,9 +143,14 @@ class ModelLoader:
         self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model = None
         
-    def build_model(self) -> TransformerZAM_multitask:
+    def build_model(self) -> ModelProtocol:
         """Build model from configuration."""
-        model = TransformerZAM_multitask(
+        
+        model_name = self.config.model_name 
+        module = importlib.import_module("trnazap.splitter.model")
+        model_class = getattr(module, model_name) 
+
+        model = model_class(
             input_size=self.config.chunk_size,
             max_seq_len=self.config.max_seq_len,
             num_classes_seq2seq=self.config.num_classes_seq2seq,
@@ -187,7 +196,7 @@ class ModelLoader:
         load_weights(self.model, checkpoint_path)
         print(f"Loaded checkpoint from {checkpoint_path}")
         
-    def get_model(self, load_checkpoint: bool = True) -> TransformerZAM_multitask:
+    def get_model(self, load_checkpoint: bool = True) -> ModelProtocol:
         """
         Get initialized model.
         
