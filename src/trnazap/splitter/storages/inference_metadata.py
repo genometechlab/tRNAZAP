@@ -36,8 +36,8 @@ class InferenceMetadata:
     
     def __repr__(self) -> str:
         return (f"InferenceMetadata(model_name='{self.model_name}', "
-                f"num_reads={self.num_reads_processed})"
-                f"chunk_size='{self.chunk_size}', ")
+                f"num_reads={self.num_reads_processed}, "
+                f"chunk_size='{self.chunk_size}'")
 
     def copy(self) -> 'InferenceMetadata':
         """Return a deep copy of the metadata."""
