@@ -10,7 +10,7 @@ from typing import Dict, Any, Optional, Tuple, Union, List, Generator
 from uuid import UUID
 
 from ..feeders import SequenceScaler
-from ..storages import InferenceResults
+from ..storages import ReadResult
 
 logging.basicConfig(level=logging.INFO)
 
@@ -56,14 +56,12 @@ class ResultsVisualizer:
     """
     def __init__(
         self,
-        results: InferenceResults,
         signal_scale: float = 1000.0,
         device: Optional[torch.device] = None,
         color_map: Dict[int, str] = COLOR_MAP,
         class_labels: Dict[int, str] = CLASS_LABELS,
         pod5_paths: Optional[Union[str, Path, List[Union[str, Path]]]] = None
     ) -> None:
-        self.results = results
         self.signal_scale = signal_scale
         self.color_map = color_map
         self.class_labels = class_labels
@@ -79,40 +77,25 @@ class ResultsVisualizer:
             self._pod5_paths = pod5_paths
 
         else:
-            try:
-                meta_paths = self.results.metadata.pod5_paths
-            except AttributeError:
-                raise ValueError(
-                    "No pod5_paths were provided, and the results metadata does not contain any. "
-                    "Please specify pod5_paths manually."
-                )
-
-            meta_paths = [Path(p) for p in (meta_paths if isinstance(meta_paths, (list, tuple, set)) else [meta_paths])]
-            if all(p.exists() for p in meta_paths):
-                self._pod5_paths = meta_paths
-            else:
-                missing = [str(p) for p in meta_paths if not p.exists()]
-                raise FileNotFoundError(
-                    f"No pod5_paths were provided, and the paths stored in results metadata no longer exist:\n"
-                    f"{missing}\n"
-                    "Please provide updated pod5_paths manually (e.g., if the files were moved or renamed)."
-                )
+            raise ValueError(
+                "No pod5_paths were provided. "
+                "Please specify pod5_paths during initialization."
+            )
 
     def _visualize(
         self,
-        read_id: str,
+        read_result: ReadResult,
         signal: np.ndarray,
         apply_crf_smoothing: bool = True,
         plot_probabilities: bool = True,
         plot_signal: bool = True,
         figure_size: Tuple[int, int] = (16, 8),
     ) -> plt.Figure:
-        
-        read_result = self.results[read_id]
+        read_id = read_result.read_id
         logits = read_result.segmentation_logits
         probabilities = read_result.segmentation_probs
         predictions = read_result.segmentation_preds
-        chunk_size = self.results.metadata.chunk_size
+        chunk_size = read_result.chunk_size
 
         if logits is None:
             raise ValueError(f"No segmentation logits found for read {read_id}")
@@ -145,7 +128,7 @@ class ResultsVisualizer:
     
     def visualize(        
         self,
-        read_ids: Union[List[str], str],
+        read_results: Union[List[ReadResult], ReadResult],
         apply_crf_smoothing: bool = True,
         plot_probabilities: bool = True,
         plot_signal: bool = True,
@@ -153,19 +136,17 @@ class ResultsVisualizer:
     ) -> Union[plt.Figure, List[plt.Figure]]:
         
         return_single_fig = False
-        if isinstance(read_ids, str):
+        if isinstance(read_results, ReadResult):
             return_single_fig = True
-            read_ids = [read_ids,]
-
-        if not all(read_id in self.results for read_id in read_ids):
-            missing = [read_id for read_id in read_ids if read_id not in self.results]
-            raise ValueError(f"Read ID(s) {', '.join(missing)} not found in results")
+            read_results = [read_results,]
+            
+        read_ids = [read_result.read_id for read_result in read_results]
         
         figs = []
         signals = self._load_signals(read_ids)
-        for read_id in read_ids:
-            fig_ = self._visualize(read_id,
-                                   signals[read_id],
+        for read_result in read_results:
+            fig_ = self._visualize(read_result,
+                                   signals[read_result.read_id],
                                    apply_crf_smoothing,
                                    plot_probabilities,
                                    plot_signal,
