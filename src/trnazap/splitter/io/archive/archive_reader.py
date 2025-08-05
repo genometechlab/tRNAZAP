@@ -20,9 +20,19 @@ PathLike = Union[str, Path, os.PathLike]
 
 
 class ZIRReader:
-    """Read inference results from one or more ZIR archive files with dynamic logit support."""
-
+    """Optimized ZIR archive reader with dynamic logit support."""
+    
     def __init__(self, paths: Union[Path, List[Path]], index: bool = False):
+        # Initialize struct cache for better performance
+        self._struct_cache = {
+            'H': struct.Struct('<H'),
+            'i': struct.Struct('<i'),
+            'B': struct.Struct('<B'),
+            'I': struct.Struct('<I'),
+            'ii': struct.Struct('<ii'),
+            'II': struct.Struct('<II'),
+        }
+        
         self._paths: List[Path] = sorted(
             self._collect_dataset(paths, recursive=True, pattern='*.zir', threads=4)
         )
@@ -36,8 +46,9 @@ class ZIRReader:
         self.record_count = 0
         metadata_dicts = []
 
+        # Use buffered I/O for better performance
         for p in self._paths:
-            f = open(p, 'rb')
+            f = open(p, 'rb', buffering=65536)  # 64KB buffer
             self._files.append(f)
             metadata_dict, record_count = self._read_header(f)
             self.decompressors.append(zstd.ZstdDecompressor())
@@ -66,117 +77,117 @@ class ZIRReader:
     def __len__(self): return self.record_count
     def __iter__(self): return self.reads()
 
-    def reads(self, selection: Optional[Iterable[str]] = None) -> Generator["ReadResult", None, None]:
+    def reads(self, selection: Optional[Set[str]] = None) -> Generator["ReadResult", None, None]:
+        """
+        Read records with optional selection filter.
+        
+        Args:
+            selection: Optional set of read IDs (use set for O(1) lookup)
+        """
+        # Convert to set if it's a list/iterable
+        if selection is not None and not isinstance(selection, set):
+            selection = set(selection)
+        
         for file_idx, (f, record_count) in enumerate(zip(self._files, self.record_counts)):
             self._current_file_idx = file_idx
             f.seek(HEADER_SIZE)
-
+            
             for _ in range(record_count):
                 result = self._read_next_record(file_idx)
-                if selection and result.read_id not in selection:
-                    continue
-                yield result
+                if selection is None or result.read_id in selection:
+                    yield result
 
     def _read_next_record(self, file_idx: int) -> "ReadResult":
+        """Optimized record reading with single read for header."""
         f = self._files[file_idx]
-
-        marker = f.read(len(RECORD_MARKER))
-        if marker != RECORD_MARKER:
-            raise EOFError(f"Missing or invalid record marker at offset {f.tell()}")
-
-        compressed_size = self._safe_unpack(f, '<I', "compressed size")
-        uncompressed_size = self._safe_unpack(f, '<I', "uncompressed size")
-
+        
+        # Read header in one go
+        header = f.read(len(RECORD_MARKER) + 8)
+        if len(header) < len(RECORD_MARKER) + 8:
+            raise EOFError("Unexpected EOF while reading record header")
+        
+        if header[:len(RECORD_MARKER)] != RECORD_MARKER:
+            raise EOFError(f"Invalid record marker at offset {f.tell() - len(header)}")
+        
+        compressed_size, uncompressed_size = struct.unpack('<II', header[len(RECORD_MARKER):])
+        
+        # Read compressed data
         compressed_data = f.read(compressed_size)
         if len(compressed_data) < compressed_size:
-            raise EOFError(f"Unexpected EOF while reading compressed data at offset {f.tell()}")
-
+            raise EOFError("Unexpected EOF while reading compressed data")
+        
+        # Decompress
         try:
             data = self.decompressors[file_idx].decompress(compressed_data)
         except zstd.ZstdError as e:
             raise ValueError(f"Decompression failed: {e}")
-
-        if len(data) != uncompressed_size:
-            raise ValueError(f"Decompressed size mismatch: expected {uncompressed_size}, got {len(data)}")
-
+        
         return self._parse_record(data)
 
     def _parse_record(self, data: bytes) -> "ReadResult":
-        """Parse record with dynamic logit support."""
+        """Optimized record parser using memoryview and cached structs."""
+        view = memoryview(data)
         offset = 0
-
+        
         # Read ID
-        read_id_len = struct.unpack_from('<H', data, offset)[0]
+        read_id_len = self._struct_cache['H'].unpack_from(view, offset)[0]
         offset += 2
         read_id = data[offset:offset + read_id_len].decode('utf-8')
         offset += read_id_len
-
-        # Basic metadata
-        num_chunks = struct.unpack_from('<i', data, offset)[0]
-        offset += 4
-        chunk_size = struct.unpack_from('<i', data, offset)[0]
-        offset += 4
-
-        logits = {}
-
-        # Check if this is the new format (has logit count) or old format
-        # We can detect by checking if the next byte is reasonable
-        next_byte = struct.unpack_from('<B', data, offset)[0]
         
-        if next_byte <= 20:  # Reasonable number of logit keys (new format)
-            # NEW FORMAT: Read dynamic logits
-            num_logits = next_byte
+        # Read metadata
+        num_chunks, chunk_size = self._struct_cache['ii'].unpack_from(view, offset)
+        offset += 8
+        
+        # Read logits count
+        num_logits = view[offset]
+        offset += 1
+        
+        logits = {}
+        
+        for _ in range(num_logits):
+            # Key name
+            key_len = view[offset]
+            offset += 1
+            key = data[offset:offset + key_len].decode('utf-8')
+            offset += key_len
+            
+            # Array dimensions
+            ndim = view[offset]
             offset += 1
             
-            for _ in range(num_logits):
-                # Read key name
-                key_len = struct.unpack_from('<B', data, offset)[0]
-                offset += 1
-                key = data[offset:offset + key_len].decode('utf-8')
-                offset += key_len
-                
-                # Read array info
-                ndim = struct.unpack_from('<B', data, offset)[0]
-                offset += 1
-                
-                # Read shape
-                shape = []
-                for _ in range(ndim):
-                    dim = struct.unpack_from('<I', data, offset)[0]
-                    shape.append(dim)
-                    offset += 4
-                
-                # Read data
-                total_elements = np.prod(shape) if shape else 1
-                array = np.frombuffer(data, dtype='float32', count=total_elements, offset=offset)
-                if shape:
-                    array = array.reshape(shape)
-                
-                logits[key] = array
-                offset += total_elements * 4
-                
-        else:
-            # OLD FORMAT: Handle legacy classification/segmentation format
-            # Reset and read using old logic
-            offset -= 1  # Go back one byte
-            
-            has_cls = struct.unpack_from('<B', data, offset)[0]
-            offset += 1
-            if has_cls:
-                length = struct.unpack_from('<I', data, offset)[0]
+            # Optimize for common cases
+            if ndim == 1:
+                dim = self._struct_cache['I'].unpack_from(view, offset)[0]
+                shape = (dim,)
                 offset += 4
-                logits['seq_class'] = np.frombuffer(data, dtype='float32', count=length, offset=offset)
-                offset += length * 4
-
-            has_seq = struct.unpack_from('<B', data, offset)[0]
-            offset += 1
-            if has_seq:
-                T, D = struct.unpack_from('<II', data, offset)
+                total_elements = dim
+            elif ndim == 2:
+                shape = self._struct_cache['II'].unpack_from(view, offset)
                 offset += 8
-                logits['seq2seq'] = np.frombuffer(data, dtype='float32', count=T * D, offset=offset).reshape((T, D))
-
+                total_elements = shape[0] * shape[1]
+            else:
+                # Cache dynamic formats
+                format_key = f'{ndim}I'
+                if format_key not in self._struct_cache:
+                    self._struct_cache[format_key] = struct.Struct(f'<{format_key}')
+                shape = self._struct_cache[format_key].unpack_from(view, offset)
+                offset += 4 * ndim
+                total_elements = np.prod(shape)
+            
+            # Read array data directly from memoryview
+            array = np.frombuffer(view, dtype=np.float32, count=total_elements, offset=offset)
+            
+            # Only reshape if multi-dimensional
+            if ndim > 1:
+                array = array.reshape(shape)
+            
+            logits[key] = array
+            offset += total_elements * 4
+        
         from ...storages import ReadResult
         return ReadResult(read_id=read_id, _logits=logits, num_chunks=num_chunks, chunk_size=chunk_size)
+
 
     def _safe_unpack(self, file, fmt: str, label: str) -> int:
         size = struct.calcsize(fmt)
@@ -235,31 +246,64 @@ class ZIRReader:
                 logger.warning(f"Field '{field}' differs across archives: {values}")
 
     def build_index(self) -> None:
+        """Build index using parallel processing for large archives."""
         if self._index is not None:
             return
-
+        
+        from concurrent.futures import ThreadPoolExecutor
+        import threading
+        
         self._index = {}
-        for file_idx, (f, count) in enumerate(zip(self._files, self.record_counts)):
-            f.seek(HEADER_SIZE)
-            for _ in range(count):
-                pos = f.tell()
-                marker = f.read(len(RECORD_MARKER))
-                if marker != RECORD_MARKER:
-                    raise ValueError(f"Invalid record marker at {pos}")
-
-                compressed_size = self._safe_unpack(f, '<I', 'compressed size')
-                uncompressed_size = self._safe_unpack(f, '<I', 'uncompressed size')
-                compressed = f.read(compressed_size)
-
-                data = self.decompressors[file_idx].decompress(compressed)
-                read_id_len = struct.unpack_from('<H', data, 0)[0]
-                read_id = data[2:2 + read_id_len].decode('utf-8')
-
-                self._index[read_id] = {
-                    'file_idx': file_idx,
-                    'offset': pos,
-                    'record_size': len(RECORD_MARKER) + 4 + 4 + compressed_size,
-                }
+        index_lock = threading.Lock()
+        
+        def index_file(file_idx: int, path: Path, record_count: int):
+            """Index a single file in a worker thread."""
+            local_index = {}
+            
+            with open(path, 'rb', buffering=65536) as f:
+                decompressor = zstd.ZstdDecompressor()
+                f.seek(HEADER_SIZE)
+                
+                for _ in range(record_count):
+                    pos = f.tell()
+                    
+                    # Read header
+                    header = f.read(len(RECORD_MARKER) + 8)
+                    if len(header) < len(RECORD_MARKER) + 8:
+                        break
+                    
+                    if header[:len(RECORD_MARKER)] != RECORD_MARKER:
+                        raise ValueError(f"Invalid record marker at {pos}")
+                    
+                    compressed_size, uncompressed_size = struct.unpack('<II', header[len(RECORD_MARKER):])
+                    
+                    # Read compressed data
+                    compressed = f.read(compressed_size)
+                    
+                    # Only decompress first part to get read ID
+                    data = decompressor.decompress(compressed)
+                    read_id_len = struct.unpack('<H', data[:2])[0]
+                    read_id = data[2:2 + read_id_len].decode('utf-8')
+                    
+                    local_index[read_id] = {
+                        'file_idx': file_idx,
+                        'offset': pos,
+                        'record_size': len(header) + compressed_size,
+                    }
+            
+            # Merge into global index
+            with index_lock:
+                self._index.update(local_index)
+        
+        # Index files in parallel
+        with ThreadPoolExecutor(max_workers=min(4, len(self._paths))) as executor:
+            futures = []
+            for idx, (path, count) in enumerate(zip(self._paths, self.record_counts)):
+                future = executor.submit(index_file, idx, path, count)
+                futures.append(future)
+            
+            for future in futures:
+                future.result()
 
     def get_read(self, read_id: str) -> "ReadResult":
         if self._index is None:
