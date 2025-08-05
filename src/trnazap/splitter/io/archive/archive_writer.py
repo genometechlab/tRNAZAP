@@ -3,7 +3,7 @@ import json
 import numpy as np
 import zstandard as zstd
 from pathlib import Path
-from typing import Optional, TYPE_CHECKING
+from typing import Optional, TYPE_CHECKING, Union
 from dataclasses import asdict
 import logging
 
@@ -176,10 +176,102 @@ class ZIRShardManager:
         self.current_count = 0
         self.total_reads = 0
         
-        if shard_size:
-            self.base_path.parent.mkdir(parents=True, exist_ok=True)
+        # Process and validate base path
+        self._process_base_path(base_path)
+        
+        # Create necessary directories
+        self._ensure_directories()
         
         self._open_new_shard()
+        
+        
+class ZIRShardManager:
+    """Manages writing to ZIR files with optional sharding and comprehensive path handling."""
+    
+    def __init__(
+        self,
+        base_path: Union[str, Path],
+        metadata: 'InferenceMetadata',
+        shard_size: Optional[int] = None,
+    ):
+        """
+        Initialize shard manager with extensive path management.
+        
+        Args:
+            base_path: Base path for output file(s)
+                - If shard_size is None: Must be a file path ending with .zir
+                - If shard_size is set:
+                    - Directory: Files saved as dir/shard0000.zir, dir/shard0001.zir
+                    - Path without extension: /path/save → /path/save_shard0000.zir
+                    - Path with extension: Extension ignored, user warned
+            metadata: Inference metadata
+            shard_size: Records per shard (None for single file)
+            
+        Raises:
+            ValueError: If path handling fails
+        """
+        self.metadata = metadata
+        self.shard_size = shard_size
+        self.current_shard = 0
+        self.current_writer: Optional[ZIRWriter] = None
+        self.current_count = 0
+        self.total_reads = 0
+        
+        # Process and validate base path
+        self._process_base_path(base_path)
+        
+        # Create necessary directories
+        self._ensure_directories()
+        
+        # Open first shard/file
+        self._open_new_shard()
+    
+    def _process_base_path(self, base_path: Union[str, Path]) -> None:
+        """Process and validate the base path according to sharding mode."""
+        input_path = Path(base_path)
+        
+        if self.shard_size is None:
+            if input_path.suffix.lower() != '.zir':
+                if input_path.suffix:
+                    self.base_path = input_path.with_suffix('.zir')
+                    logger.warning(
+                        f"Single file mode: Changed extension from '{input_path.suffix}' to '.zir'. "
+                        f"Output will be: {self.base_path}"
+                    )
+                else:
+                    self.base_path = input_path.with_suffix('.zir')
+                    logger.warning(f"Single file mode: Added .zir extension. Output will be: {self.base_path}")
+            else:
+                self.base_path = input_path
+                
+            self.shard_pattern = None
+            self.output_dir = self.base_path.parent
+            
+        else:
+            if input_path.suffix:
+                self.output_dir = input_path.parent
+                base_name = input_path.stem
+                self.shard_pattern = f"{base_name}_shard{{:04d}}.zir"
+                logger.warning(
+                    f"Sharding mode: Extension '{input_path.suffix}' ignored. "
+                    f"Files will be saved as: {self.output_dir}/{base_name}_shard0000.zir, etc."
+                )
+                
+            else:
+                self.output_dir = input_path
+                self.shard_pattern = "shard{:04d}.zir"
+            
+            # Store the pattern for reference
+            self.base_path = input_path  # Keep original for reference
+    
+    def _ensure_directories(self) -> None:
+        """Create necessary directories."""
+        if self.shard_size is None:
+            # Single file mode - create parent directory if needed
+            self.output_dir.mkdir(parents=True, exist_ok=True)
+        else:
+            # Sharding mode - create output directory
+            self.output_dir.mkdir(parents=True, exist_ok=True)
     
     def add_result(self, read_result: 'ReadResult') -> None:
         """Add a result, potentially opening a new shard."""
@@ -200,20 +292,32 @@ class ZIRShardManager:
         suffix = self.base_path.suffix or '.zir'
         return self.base_path.parent / f"{base_stem}_shard{self.current_shard:04d}{suffix}"
     
+    def _get_shard_path(self) -> Path:
+        """Generate shard filename based on mode."""
+        if self.shard_size is None:
+            # Single file mode
+            return self.base_path
+        else:
+            # Sharding mode
+            filename = self.shard_pattern.format(self.current_shard)
+            return self.output_dir / filename
+    
     def _open_new_shard(self) -> None:
         """Open a new shard file."""
         shard_path = self._get_shard_path()
         self.current_writer = ZIRWriter(shard_path, self.metadata)
         self.current_writer.__enter__()
         self.current_count = 0
+        
     
     def _close_current_shard(self) -> None:
         """Close current shard."""
         if self.current_writer:
             self.current_writer.__exit__(None, None, None)
+            
             self.current_writer = None
             self.current_shard += 1
     
     def close(self) -> None:
-        """Close any open shard."""
+        """Close any open shard and finalize."""
         self._close_current_shard()
