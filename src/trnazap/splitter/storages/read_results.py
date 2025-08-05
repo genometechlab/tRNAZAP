@@ -61,7 +61,7 @@ class ReadResult:
         if "segmentation" in self._logits:
             return self._logits.get('segmentation')[:self.num_chunks]
         else:
-            raise None
+            return None
 
     @property
     def classification_logits(self) -> Optional[np.ndarray]:
@@ -69,7 +69,7 @@ class ReadResult:
         if "classification" in self._logits:
             return self._logits.get('classification')
         else:
-            raise None
+            return None
 
     # ------------------------------------------------------------------------
     # Probabilities (softmax outputs)
