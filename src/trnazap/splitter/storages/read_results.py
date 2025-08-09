@@ -177,7 +177,7 @@ class ReadResult:
         if indices.size > 0:
             start_ = indices[0].item()
             end_ = indices[-1].item()
-            return (start_*self.chunk_size, end_*self.chunk_size)
+            return (start_*self.chunk_size, (end_+1)*self.chunk_size-1)
         return (-1, -1)
 
 
