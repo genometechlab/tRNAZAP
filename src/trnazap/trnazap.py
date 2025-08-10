@@ -3,10 +3,16 @@
 This module contains argument parsing, overall function control,
 and executes submodules.
 """
+import os
+os.environ['KMP_WARNINGS'] = '0'
+os.environ['OMP_NUM_THREADS'] = '1'
 
 import argparse
 import sys
 from multiprocessing import Pool
+
+import numba
+numba.set_num_threads(1)
 
 from aligner.supporting_functions.supporting_functions import (
     make_parameter_list,
