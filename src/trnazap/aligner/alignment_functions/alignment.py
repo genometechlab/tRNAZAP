@@ -8,7 +8,9 @@ reference region.
 
 import numpy as np
 import pysam
+import numba
 from numba import njit
+numba.set_num_threads(1)
 
 
 @njit(parallel=True, cache = True, fastmath = True)
@@ -992,7 +994,7 @@ def align_read(
         # This preserves any existing alignment information
         #print("skipped")
         return pysam_read
-    
+
     # Extract the predicted tRNA portion from the full read sequence
     # This function returns:
     # - sub_sequence: just the tRNA bases
@@ -1017,7 +1019,7 @@ def align_read(
     a.reference_id = ref_index                    # Which reference this aligns to
     a.flag = 0                                    # Start with unmapped flag (will update if secondary)
     a.tags = pysam_read.get_tags()                # Preserve any custom tags (RG, BC, etc.)
-    
+    a.set_tag('zp',inference_dict_read[1])
     # Perform the actual sequence alignment between extracted tRNA and reference
     # This function (not shown) likely uses dynamic programming to find the best
     # alignment and returns:
