@@ -12,8 +12,75 @@ import numba
 from numba import njit
 numba.set_num_threads(1)
 
+@njit(cache = True, fastmath = True)
+def wagner_fisher_affine(s: str, t: str):
+    """Optimized Levenshtein distance calculation for tRNA.
 
-@njit(parallel=True, cache = True, fastmath = True)
+    This implementation is specialized for tRNA alignment
+    with modified scoring rules
+    that allow free end gaps in the reference sequence (t).
+    This accommodates partial
+    alignments where only a portion of the query may match
+    the reference.
+
+    Args:
+        s: Query sequence (the observed tRNA sequence based
+        on model prediction)
+        t: Reference sequence (the known tRNA template of
+        the predicted class)
+
+    Returns:
+        tuple: A tuple containing:
+            - float: The edit distance score
+            - ndarray: The complete dynamic programming
+            matrix
+    """
+    gap_open = 2
+    gap_extend = 0.5
+    
+    m, n = len(s), len(t)
+    d = np.zeros(shape=(m + 1, n + 1), dtype=np.float32)
+    move_mat = np.zeros(shape=(m+1, n+1), dtype=np.int8)
+    move_mat[0, 1:] = 2
+    move_mat[1:, 0] = 1
+
+    # Initialize first column with zeros to allow free start gaps in reference
+    # This means the query can start aligning at any position in the reference
+    d[0, :] = np.array([0] + [gap_open + gap_extend * (j-1) for j in range(1, n+1)])
+    # Fill the matrix
+    for j in range(1, n + 1):
+        for i in range(1, m + 1):
+            
+            if s[i - 1] == t[j - 1]:
+                substitution_cost = d[i - 1, j - 1]
+            else:
+                substitution_cost = d[i - 1, j - 1] + 1
+                
+            if move_mat[i-1, j] == 1:
+                deletion_score = d[i - 1, j] + gap_extend
+            else:
+                deletion_score = d[i - 1, j] + gap_open
+
+            if move_mat[i, j-1] == 2:
+                insertion_score = d[i, j-1] + gap_extend
+            else:
+                insertion_score = d[i, j-1] + gap_open
+
+            if substitution_cost <= deletion_score and substitution_cost <= insertion_score:
+                d[i, j] = substitution_cost
+                if s[i-1] != t[j - 1]:
+                    move_mat[i, j] = 3 # This is the signal value for a mismatch
+            elif insertion_score <= deletion_score:
+                move_mat[i, j] = 2 # Signal value for an insertion
+                d[i, j] = insertion_score
+            else:
+                move_mat[i, j] = 1 # Signal value for a deletion 
+                d[i, j] = deletion_score
+
+    return move_mat, d
+
+'''
+@njit(cache = True, fastmath = True)
 def wagner_fisher(s: str, t: str):
     """Optimized Levenshtein distance calculation for tRNA.
 
@@ -36,6 +103,7 @@ def wagner_fisher(s: str, t: str):
             - ndarray: The complete dynamic programming
             matrix
     """
+    
     m, n = len(s), len(t)
     d = np.zeros(shape=(m + 1, n + 1), dtype=np.float32)
 
@@ -58,11 +126,12 @@ def wagner_fisher(s: str, t: str):
             )  # substitution/match
 
     return d
+'''
 
 @njit(cache=True, fastmath=True)
-def calculate_vertical_traversal(d):
+def calculate_vertical_traversal(move_mat):
     """Optimized vertical traversal with reduced memory allocation"""
-    rows, cols = d.shape
+    rows, cols = move_mat.shape
     
     # Pre-allocate all arrays
     trav_mat = np.full((rows, cols), -1, dtype=np.int32)
@@ -78,21 +147,54 @@ def calculate_vertical_traversal(d):
         path_x = np.zeros(rows + cols, dtype=np.int32)
         path_y = np.zeros(rows + cols, dtype=np.int32)
         
-        tmp_x, tmp_y = seed, cols - 1
+        m, n = seed, cols - 1
         path_idx = 0
-        path_x[path_idx] = tmp_x
-        path_y[path_idx] = tmp_y
+        path_x[path_idx] = m
+        path_y[path_idx] = n
         path_idx += 1
         
-        start = tmp_x
-        
-        while tmp_y > 1:
-            # Compute scores only once
-            del_score = d[tmp_x - 1, tmp_y] if tmp_x >= 1 else np.inf
-            ins_score = d[tmp_x, tmp_y - 1] if tmp_y >= 1 else np.inf
-            sub_score = d[tmp_x - 1, tmp_y - 1] if (tmp_x >= 1 and tmp_y >= 1) else np.inf
+        start = m
+
+        while n > 0:
+            # Diagonal move: check if it's a match or substitution
+            if move_mat[m, n] == 0 or move_mat[m, n] == 3:
+                m -= 1
+                n -= 1
+            # Horizontal move: corresponds to deletion in reference frame
+            elif move_mat[m , n] == 2:
+                # Note: "deletion" here is relative to transforming query → reference
+                # In alignment terms, this is an insertion into the query
+                n -= 1
+            # Vertical move: corresponds to insertion in reference frame
+            else:
+                m -= 1
+
+            if trav_mat[m, n] != -1:
+                start = trav_mat[m, n]
+                break
+            
+            start = m
+            path_x[path_idx] = m
+            path_y[path_idx] = n
+            path_idx += 1
+    
+        """
+        while n > 0:
+            # For each position, evaluate all three possible previous moves
+            # and choose the one that led to the current cell with minimum cost
+            del_score = (d[tmp_x - 1, m] == 1) * -1 if tmp_x >= 1 else np.inf
+            ins_score = (d[tmp_x, tmp_y - 1] == 2) * -1 if tmp_y >= 1 else np.inf
+            sub_score = (d[tmp_x - 1, tmp_y - 1] == 3) * -1 if tmp_x >= 1 and tmp_y >= 1 else np.inf
+            match_score = (d[tmp_x - 1, tmp_y - 1] == 0) * -1 if tmp_x >= 1 and tmp_y >= 1 else np.inf
             
             # Find minimum and corresponding move
+            if match_score <= sub_score and match_score <= del_score and match_score <= ins_score:
+                if tmp_x > 0 and tmp_y > 0 and trav_mat[tmp_x - 1, tmp_y - 1] != -1:
+                    start = trav_mat[tmp_x - 1, tmp_y - 1]
+                    break
+                tmp_x -= 1
+                tmp_y -= 1
+                
             if sub_score <= del_score and sub_score <= ins_score:
                 if tmp_x > 0 and tmp_y > 0 and trav_mat[tmp_x - 1, tmp_y - 1] != -1:
                     start = trav_mat[tmp_x - 1, tmp_y - 1]
@@ -114,7 +216,7 @@ def calculate_vertical_traversal(d):
             path_x[path_idx] = tmp_x
             path_y[path_idx] = tmp_y
             path_idx += 1
-        
+        """
         # Update trav_mat for all positions in path
         for i in range(path_idx):
             trav_mat[path_x[i], path_y[i]] = start
@@ -123,112 +225,7 @@ def calculate_vertical_traversal(d):
     
     return trav_mat, traversal_distance
 
-def calculate_vertical_traversal_old(d):
-    """
-    Calculate the vertical traversal path.
-
-    For each position in the last column of the dynamic
-    programming matrix, this function traces back to find
-    where the alignment would start in the reference
-    sequence. This helps identify the optimal subset of
-    the query that best matches the reference.
-
-    Args:
-        d: Dynamic programming matrix from wagner_fisher
-        algorithm
-
-    Returns:
-        tuple: A tuple containing:
-            - ndarray: Matrix mapping each position to its
-            starting point
-            - ndarray: Array of vertical traversal distances
-            for each position
-    """
-   
-    # Initialization matrix to store the start position for each cell in traversal
-    trav_mat = np.full((d.shape[0], d.shape[1]), -1)
-
-    # For each position in the query, store the vertical distance traversed
-    # (initialized to a high value - worst case would be traversing the entire matrix)
-    traversal_distance = np.full((d.shape[0]), d.shape[0] + d.shape[1] + 1)
-
-    # Iterate through potential alignment end positions
-    # (last column), starting from bottom
-    # We work backward ([::-1]) to prioritize longer
-    # alignments
-    for seed in list(range(d.shape[0]))[::-1]:
-        tmp_x, tmp_y = (seed, d.shape[1] - 1)  # Start at
-        # the rightmost column
-
-        # Track all positions in the traversal path
-        positions = [0] * (tmp_x + tmp_y)
-        positions[0] = (seed, -1)  # Store the starting
-        # seed position
-        position_tracker = 1
-
-        # Traverse matrix until reaching the left edge (y=1)
-        while tmp_y > 1:
-            # Evaluate the three possible moves:
-            # deletion, insertion, substitution/match
-            # Use infinity for invalid moves (out of bounds)
-            deletion_score = d[tmp_x - 1, tmp_y] if tmp_x >= 1 else np.inf
-            insertion_score = d[tmp_x, tmp_y - 1] if tmp_y >= 1 else np.inf
-            sub_or_match_score = (
-                d[tmp_x - 1, tmp_y - 1] if tmp_x >= 1 and tmp_y >= 1 else np.inf
-            )
-
-            # Choose the best move - prioritize diagonal (match/substitution) when tied
-            if (
-                sub_or_match_score <= deletion_score
-                and sub_or_match_score <= insertion_score
-            ):
-                # Check if we've already calculated the traversal for this position
-                if trav_mat[tmp_x - 1][tmp_y - 1] != -1:
-                    # If we have, we can short-circuit the calculation
-                    start = trav_mat[tmp_x - 1][tmp_y - 1]
-                    tmp_y = 1  # Force exit the while loop
-                else:
-                    # Diagonal move (substitution/match)
-                    positions[position_tracker] = (tmp_x - 1, tmp_y - 1)
-                    tmp_x -= 1
-                    tmp_y -= 1
-                    start = tmp_x
-                    position_tracker += 1
-
-            # Horizontal move (insertion into query) comes next in priority
-            elif insertion_score <= deletion_score:
-                if trav_mat[tmp_x][tmp_y - 1] != -1:
-                    start = trav_mat[tmp_x][tmp_y - 1]
-                    tmp_y = 1  # Force exit
-                else:
-                    positions[position_tracker] = (tmp_x, tmp_y - 1)
-                    tmp_y -= 1
-                    start = tmp_x
-                    position_tracker += 1
-
-            # Vertical move (deletion from query) as last option
-            else:
-                if trav_mat[tmp_x - 1][tmp_y] != -1:
-                    start = trav_mat[tmp_x - 1][tmp_y]
-                    tmp_y = 1  # Force exit
-                else:
-                    positions[position_tracker] = (tmp_x - 1, tmp_y)
-                    tmp_x -= 1
-                    start = tmp_x
-                    position_tracker += 1
-
-        # Record the start position for all cells in this path
-        # This builds up a memoization table for future traversals
-        for p in range(position_tracker):
-            trav_mat[positions[p]] = start
-
-        # Calculate vertical distance (how much of query is used)
-        traversal_distance[seed] = abs(seed - trav_mat[(seed, -1)])
-
-    return trav_mat, traversal_distance
-
-
-def wagner_fisher_truncated(d):
+def wagner_fisher_truncated(dist_mat, move_mat):
     """
     Find the optimal sub-alignment from the Wagner-Fisher matrix.
 
@@ -241,7 +238,7 @@ def wagner_fisher_truncated(d):
     fragments where we want to identify the longest well-matching segment.
 
     Args:
-        d: Dynamic programming matrix from wagner_fisher algorithm
+        d: Dynamic programming transition matrix from wagner_fisher algorithm
 
     Returns:
         tuple: A tuple containing:
@@ -250,9 +247,9 @@ def wagner_fisher_truncated(d):
             - int: Ending position in the reference sequence
     """
     # Traversal Distances
-    trav, trav_dist = calculate_vertical_traversal(d)
+    trav, trav_dist = calculate_vertical_traversal(move_mat)
 
-    scores = d[1:, -1] + 1
+    scores = dist_mat[1:, -1] + 1
     with np.errstate(divide='ignore'):
         scores = scores / trav_dist[1:]
 
@@ -261,8 +258,83 @@ def wagner_fisher_truncated(d):
 
     # Return the distance at the selected point, the
     # truncated matrix, and the truncation point
-    return d[: truncate_idx + 1, :], trav[(truncate_idx, -1)], truncate_idx
+    return move_mat[: truncate_idx + 1, :], trav[(truncate_idx, -1)], truncate_idx
 
+def compute_edit_operations_affine(s: str, t: str):
+    move_mat, dist_mat = wagner_fisher_affine(s, t)
+    move_mat, start, stop = wagner_fisher_truncated(dist_mat, move_mat)
+    
+    # Get dimensions of the truncated matrix
+    m, n = move_mat.shape[0] - 1, move_mat.shape[1] - 1
+
+    # Pre-allocate array with maximum possible size (m+n)
+    max_operations = m + n
+    instr_array = np.zeros(max_operations, dtype=np.int8)
+
+    # Initialize index for filling the array (from the end)
+    idx = max_operations - 1
+
+    # Trace back through the matrix
+    while n > 0:
+        # Diagonal move: check if it's a match or substitution
+        if move_mat[m, n] == 0:
+            instr_array[idx] = ord("m")  # Match (identical bases)
+            m -= 1
+            n -= 1
+        elif move_mat[m, n] == 3:
+            instr_array[idx] = ord("s") 
+            m -= 1
+            n -= 1
+        # Horizontal move: corresponds to deletion in reference frame
+        elif move_mat[m , n] == 2:
+            # Note: "deletion" here is relative to transforming query → reference
+            # In alignment terms, this is an insertion into the query
+            instr_array[idx] = ord("d")  # Deletion
+            n -= 1
+        # Vertical move: corresponds to insertion in reference frame
+        else:
+            # In alignment terms, this is a deletion from the query
+            instr_array[idx] = ord("i")  # Insertion
+            m -= 1
+
+        idx -= 1
+        '''
+        # For each position, evaluate all three possible previous moves
+        # and choose the one that led to the current cell with minimum cost
+        deletion_score = (d[m - 1, n] == 1) * -1 if m >= 1 else np.inf
+        insertion_score = (d[m , n - 1] == 2) * -1 if n >= 1 else np.inf
+        sub_score = (d[m - 1, n - 1] == 3) * -1 if m >= 1 and n >= 1 else np.inf
+        match_score = (d[m - 1, n - 1] == 0) * -1 if m >= 1 and n >= 1 else np.inf
+
+        # Diagonal move: check if it's a match or substitution
+        if (match_score <= sub_score and
+            match_score <= insertion_score and
+            match_score <= deletion_score):
+            instr_array[idx] = ord("m")  # Match (identical bases)
+            m -= 1
+            n -= 1
+        elif (sub_score <= insertion_score and
+              sub_score <= deletion_score):
+            instr_array[idx] = ord("s") 
+            m -= 1
+            n -= 1
+        # Horizontal move: corresponds to deletion in reference frame
+        elif insertion_score <= deletion_score:
+            # Note: "deletion" here is relative to transforming query → reference
+            # In alignment terms, this is an insertion into the query
+            instr_array[idx] = ord("d")  # Deletion
+            n -= 1
+        # Vertical move: corresponds to insertion in reference frame
+        else:
+            # In alignment terms, this is a deletion from the query
+            instr_array[idx] = ord("i")  # Insertion
+            m -= 1
+
+        idx -= 1
+        '''
+
+    return instr_array[idx + 1 :], start, stop   
+        
 def compute_edit_operations(s: str, t: str):
     """
     Compute the edit operations required to transform s (query) into t (reference).
@@ -290,7 +362,7 @@ def compute_edit_operations(s: str, t: str):
         - 'd' (100): Deletion
     """
     # Get the distance matrix and truncate it
-    full_matrix = wagner_fisher(s, t)
+    full_matrix = wagner_fisher_affine(s, t)
     d, start, stop = wagner_fisher_truncated(full_matrix)
 
     # We're Going to try a full truncation
@@ -359,7 +431,7 @@ def edit_instructions(s: str, t: str):
             - int: Starting position in the query
             - int: Ending position in the query
     """
-    operation_codes, start, stop = compute_edit_operations(s, t)
+    operation_codes, start, stop = compute_edit_operations_affine(s, t)
 
     # Convert codes to characters in a Python list
     instructions = [chr(code) for code in operation_codes]
@@ -455,7 +527,7 @@ def cigar_tuples_from_edit_instrucitons(
     for pair in cigar_tuples:
         if pair[0] != 4 and pair[0] != 7:  # If not soft clip (4) or match (7)
             edit_distance += pair[1]
-
+    #print(f"{query_start=} {five_clip=} {query_end=} {three_clip=} {cigar_tuples=} {instructions=}")
     return cigar_tuples, int(edit_distance)
 
 
@@ -540,15 +612,15 @@ def subset_sequence(pysam_read, trna_indices):
         return ("", None, None)
 
     # Get array indices for the first position after start and last position before end
-    start = start[0][0]  # First base within tRNA region
+    start = max(start[0][0]-1, 0)  # First base within tRNA region
     #stop = stop[0][-1] - 1  # Last base within tRNA region
     #testing why the -1 was there
-    stop = stop[0][-1]
+    stop = stop[0][-1]+1
 
     # Calculate the length of unaligned regions for soft-clipping
     # These are important for generating correct CIGAR strings later
     three_prime_slice = start  # Number of bases before the tRNA region
-    five_prime_slice = len(moves) - stop  # Number of bases after the tRNA region
+    five_prime_slice = max(0, len(moves) - stop)  # Number of bases after the tRNA region
 
     # The sequence is stored in reverse complement orientation in the read
     # So we first reverse it, extract the relevant portion, then reverse again
@@ -664,7 +736,7 @@ def edit_instructions_from_smith_waterman(traceback_mat, max_len, tRNA_start, fr
     
     Traces back through the alignment path from the highest-scoring position to the
     start of the local alignment, collecting the edit operations needed to transform
-    the reference sequence (tRNA) into the query sequence (fragment). Uses a clever
+    the reference sequence (tRNA) into the query sequence (fragment). Uses a 
     reverse-filling strategy to avoid needing to reverse the instruction array.
     
     The function uses extended CIGAR operation codes:
@@ -710,7 +782,7 @@ def edit_instructions_from_smith_waterman(traceback_mat, max_len, tRNA_start, fr
     edit_instructions = [""] * max_len
     
     # Start filling from the end of the array using negative indexing
-    # This clever technique means our final array will already be in forward order
+    # This technique means our final array will already be in forward order
     instruction_pos = -1
     
     # Initialize traceback position at the highest-scoring cell
@@ -768,7 +840,7 @@ def edit_instructions_from_smith_waterman(traceback_mat, max_len, tRNA_start, fr
     # Return the used portion of the edit instructions array
     # instruction_pos+1 because instruction_pos points to the last unused position
     # Also return the final positions, which represent the alignment START
-    # (confusingly named 'end' for historical reasons)
+    # (confusingly named 'end' when put in dynamic programming context)
     return edit_instructions[instruction_pos+1:], i, j
 
 def fragment_align(sub_sequence, ref_sequence, five_clip, three_clip):
@@ -860,7 +932,7 @@ def trim_cigar_to_matches(cigar_tuples):
     Example:
         Input:  [(4,5), (2,6), (7,1), (2,1), (7,3), (2,32), (4,45)]
                   5S      6D      1=      1D      3=      32D      45S
-        Output: [(4,5), (7,1), (2,1), (7,3), (4,45)], ref_shift=6
+        Output: [(4,5), (7,1), (2,1), (7,3), (4,45)], ref_shift=6, counts=(0,0,38)
         
     The 6D at start is removed and ref_start shifts by 6.
     The 32D at end is removed (no ref_start change).
@@ -877,12 +949,18 @@ def trim_cigar_to_matches(cigar_tuples):
         8 = X (sequence mismatch, extended CIGAR)
     
     Returns:
-        tuple: (trimmed_cigar, ref_start_shift)
+        tuple: (trimmed_cigar, ref_start_shift, mismatches_to_soft, insertions_to_soft, deletions_removed)
             - trimmed_cigar: Updated CIGAR list with soft clips
             - ref_start_shift: How many bases to add to reference_start
+            - total_changes_to_soft: Number of operations converted to soft clips
     """
     if not cigar_tuples:
-        return cigar_tuples, 0
+        return cigar_tuples, 0, 0
+    
+    # Initialize counts
+    mismatches_to_soft = 0
+    insertions_to_soft = 0
+    deletions_removed = 0
     
     # Find first match
     first_match = -1
@@ -892,7 +970,7 @@ def trim_cigar_to_matches(cigar_tuples):
             break
     
     if first_match == -1:  # No matches found
-        return [], 0
+        return [], 0, 0
     
     # Find last match
     last_match = -1
@@ -902,8 +980,6 @@ def trim_cigar_to_matches(cigar_tuples):
             break
     
     # Check if trimming is even needed
-    # If the first match is at the beginning (ignoring soft clips) and
-    # the last match is at the end (ignoring soft clips), no trimming needed
     needs_trimming = False
     
     # Check start: anything before first match that's not a soft clip?
@@ -919,7 +995,7 @@ def trim_cigar_to_matches(cigar_tuples):
             break
     
     if not needs_trimming:
-        return cigar_tuples, 0
+        return cigar_tuples, 0, 0
     
     # Count reference bases consumed before first match (deletions only)
     # Also count ALL query bases that need to be soft-clipped
@@ -929,17 +1005,31 @@ def trim_cigar_to_matches(cigar_tuples):
         op, length = cigar_tuples[i]
         if op == 2:  # Deletion
             ref_start_shift += length
-        elif op in (1, 4, 8):  # Insertion, soft clip, mismatch
+            deletions_removed += length
+        elif op == 1:  # Insertion
             extra_soft_clip_5 += length
-        # Operation 0 (M) should not appear here if using extended CIGAR correctly
+            insertions_to_soft += length
+        elif op == 4:  # Soft clip
+            extra_soft_clip_5 += length
+        elif op == 8:  # Mismatch
+            ref_start_shift += length
+            extra_soft_clip_5 += length
+            mismatches_to_soft += length
     
     # Count ALL query bases after last match that need to be soft-clipped
     extra_soft_clip_3 = 0
     for i in range(last_match + 1, len(cigar_tuples)):
         op, length = cigar_tuples[i]
-        if op in (1, 4, 8):  # Insertion, soft clip, mismatch
+        if op == 2:  # Deletion
+            deletions_removed += length
+        elif op == 1:  # Insertion
             extra_soft_clip_3 += length
-        # Operation 0 (M) should not appear here if using extended CIGAR correctly
+            insertions_to_soft += length
+        elif op == 4:  # Soft clip
+            extra_soft_clip_3 += length
+        elif op == 8:  # Mismatch
+            extra_soft_clip_3 += length
+            mismatches_to_soft += length
     
     # Build final CIGAR
     result = []
@@ -949,7 +1039,100 @@ def trim_cigar_to_matches(cigar_tuples):
     if extra_soft_clip_3 > 0:
         result.append((4, extra_soft_clip_3))  # Soft clip
     
-    return result, ref_start_shift
+    return result, ref_start_shift, mismatches_to_soft + insertions_to_soft + deletions_removed
+
+@njit(fastmath = True, cache = True)
+def compare_shot_in_the_dark(result2_ed, result2_start, result2_end, result1_ed, result1_start, result1_end):
+    if result2_end - result2_start <= 0:
+        return False
+    elif result1_end - result1_start <= 0:
+        return True
+    if ((result2_end - result2_start - result2_ed) / (result2_end - result2_start) > 
+        (result1_end - result1_start - result1_ed) / (result1_end - result1_start)):
+        return True
+    return False
+
+@njit(fastmath = True, cache = True)
+def frag_update(pre_cigar_first, pre_cigar_last, post_cigar_first, post_cigar_last):
+    three_shift = 0
+    five_shift = 0
+    
+    if pre_cigar_first[0] == 4 and post_cigar_first[0] == 4:
+        three_shift += post_cigar_first[1] - pre_cigar_first[1]
+
+    if pre_cigar_first[0] != 4 and post_cigar_first[0] == 4:
+        three_shift += post_cigar_first[1]
+
+    if pre_cigar_last[0] == 4 and post_cigar_last[0] == 4:
+        five_shift += post_cigar_last[1] - pre_cigar_last[1]
+
+    if pre_cigar_last[0] != 4 and post_cigar_last[0] == 4:
+        five_shift += post_cigar_last[1]
+
+    return (five_shift, three_shift)
+    
+#This sucks. Would it be faster to make all three reads and just check them? Prolly more accurate...
+def shot_in_the_dark_alignment(pysam_read, top_three_ref_dict):
+    #Top three ref dict:
+    # {index : [ref_index, ref_sequence]}
+    # This will be 0, 1, 2 based on the order of classification
+    pre_results = [fragment_align(pysam_read.query_sequence, top_three_ref_dict[i][1], 0 , 0) for i in range(3)]
+    results = []
+    for pr in pre_results:
+        if pr[0] is None:  # Skip failed alignments
+            results.append((None, float('inf'), 0, 0, 0, 0))
+            continue
+        updated_cigar, start_off_set, edit_delta = trim_cigar_to_matches(pr[0])
+        five_shift, three_shift = frag_update(pr[0][0], pr[0][-1], updated_cigar[0], updated_cigar[-1])
+        results.append((updated_cigar, 
+                        pr[1] - edit_delta, 
+                        pr[3] + start_off_set,
+                        pr[2] - (edit_delta - start_off_set),
+                        pr[4] + five_shift,
+                        pr[5] + three_shift))                      
+    #Each element of results contains the following:
+        # (cigar, edit_dist, tRNA_start, tRNA_end, frag_start, frag_end)
+    
+    best_index = 0
+    best_result = results[0]
+    if (abs(best_result[3] - best_result[2]) - best_result[1] < 15 or 
+        compare_shot_in_the_dark(results[1][1], 
+                                 results[1][3], 
+                                 results[1][2], 
+                                 best_result[1], 
+                                 best_result[3], 
+                                 best_result[2])):
+        best_result = results[1]
+        best_index = 1
+    if (abs(best_result[3] - best_result[2]) - best_result[1] < 15 or 
+        compare_shot_in_the_dark(results[2][1], 
+                                 results[2][3], 
+                                 results[2][2], 
+                                 best_result[1], 
+                                 best_result[3], 
+                                 best_result[2])):
+        best_result = results[2]
+        best_index = 2
+    
+    if best_result[0] is None:
+        return pysam_read
+        
+    a = pysam.AlignedSegment()
+    a.query_name = pysam_read.query_name              # Unique read identifier
+    a.query_sequence = pysam_read.query_sequence      # Complete original sequence (not just tRNA part)
+    a.query_qualities = pysam_read.query_qualities    # Phred quality scores for each base
+    a.reference_id = top_three_ref_dict[best_index][0] # Which reference this aligns to
+    a.flag = 0                                        # Start with unmapped flag (will update if secondary)
+    a.tags = pysam_read.get_tags()                    # Preserve any custom tags (RG, BC, etc.)
+    a.set_tag('ls', best_index) #What is ls? last shot?
+    a.reference_start = best_result[2]
+    a.cigar = best_result[0]
+    a.set_tag("ED", best_result[1])
+    
+    if (a.get_tag("ED") > a.reference_length * 0.4) or 15 > abs(a.reference_end - a.reference_start) - best_result[1]:
+        return pysam_read
+    else:
+        return a    
 
 def align_read(
     pysam_read, inference_dict_read, ref_index, ref_sequence, secondary=False
@@ -989,12 +1172,19 @@ def align_read(
     # Check if the ML model successfully identified a tRNA region in this read
     # The value (-1, -1) is a sentinel indicating "no tRNA found"
     #print(inference_dict_read[1])
-    if inference_dict_read[1] == (-1, -1):
+    
+    if inference_dict_read[1] == (-1, -1): #SHOT IN THE DARK ALIGNMENT
         # No predicted tRNA region - return the original read unchanged
         # This preserves any existing alignment information
         #print("skipped")
         return pysam_read
 
+
+    ts = pysam_read.get_tag('ts')
+    if ts > inference_dict_read[1][0]:
+        tRNA_signal_indices = (ts, inference_dict_read[1][1])
+    else:
+        tRNA_signal_indices = inference_dict_read[1]
     # Extract the predicted tRNA portion from the full read sequence
     # This function returns:
     # - sub_sequence: just the tRNA bases
@@ -1002,13 +1192,14 @@ def align_read(
     # - five_slice: number of bases before the tRNA (5' end)
     # These flanking regions will be soft-clipped in the final alignment
     sub_sequence, three_slice, five_slice = subset_sequence(
-        pysam_read, inference_dict_read[1]
+        pysam_read, tRNA_signal_indices
     )
+    
     #print(f"{pysam_read.query_sequence=}")
     #print(f"{sub_sequence=}\t{three_slice=}\t{five_slice=}")
     # Sanity check: ensure we actually extracted something
     # This could fail if the predicted boundaries were invalid
-    if len(sub_sequence) == 0:
+    if len(sub_sequence) == 0: #SHOT IN THE DARK ALIGNMENT
         return pysam_read
     
     # Transfer all the read metadata to our new alignment record
@@ -1019,7 +1210,8 @@ def align_read(
     a.reference_id = ref_index                    # Which reference this aligns to
     a.flag = 0                                    # Start with unmapped flag (will update if secondary)
     a.tags = pysam_read.get_tags()                # Preserve any custom tags (RG, BC, etc.)
-    a.set_tag('zp',inference_dict_read[1])
+    a.set_tag('ZP',inference_dict_read[1])
+    a.set_tag('ZI',(int(five_slice), int(three_slice)))
     # Perform the actual sequence alignment between extracted tRNA and reference
     # This function (not shown) likely uses dynamic programming to find the best
     # alignment and returns:
@@ -1042,25 +1234,32 @@ def align_read(
     # Flag 256 in SAM specification indicates "secondary alignment"
     # This is used when a read could align equally well to multiple references
     if secondary:
-        a.mapping_quality = 60  # Keep high quality even for secondary alignments
+        a.mapping_quality = 0  # Keep high quality even for secondary alignments
         a.flag = 256           # Set the secondary alignment bit flag
     
     # Convert our alignment operations into standard CIGAR format
     # CIGAR strings encode alignments compactly: M=match/mismatch, I=insertion, D=deletion, S=soft clip
     # The soft clipping (S operations) indicates bases present in the read but not part of alignment
-    a.cigar, edit_dist = cigar_tuples_from_edit_instrucitons(
+    cigar, edit_dist = cigar_tuples_from_edit_instrucitons(
         edit_instruction_list,              # The alignment operations to encode
-        query_start=max(0, start - 1),      # Convert to 0-based coordinates (alignment uses 1-based)
+        query_start=max(0, start),          # Convert to 0-based coordinates (alignment uses 1-based)
         five_clip=five_slice,               # Bases before tRNA to soft-clip (5' end)
         query_end=len(sub_sequence) - stop, # Calculate bases after alignment to soft-clip
         three_clip=max(0, three_slice),     # Bases after tRNA to soft-clip (3' end)
     )
-    
+
+    trimmed_cigar, ref_off_set, edit_delta = trim_cigar_to_matches(cigar)
+    edit_dist = edit_dist - edit_delta
+    a.cigar = trimmed_cigar
+    a.reference_start += ref_off_set
     # Store the edit distance as a custom SAM tag
     # Edit distance = number of mismatches + number of indels in the alignment
     # This is a standard metric for alignment quality (lower is better)
     a.set_tag("ED", edit_dist)
-    
+
+    if a.reference_length is None: # What does this do? Impossible for no positions to align... Consider removing for now...
+        return pysam_read
+        
     # Fragment alignment check - this is a fallback strategy
     # Some tRNA sequences might only partially overlap with the reference
     # (e.g., if the read contains a tRNA fragment rather than complete tRNA)
@@ -1077,7 +1276,8 @@ def align_read(
             return pysam_read
         
         #print(f"pre-{cigar=}")
-        cigar, ref_shift = trim_cigar_to_matches(cigar)
+        cigar, ref_shift, edit_offset = trim_cigar_to_matches(cigar)
+        edit_dist = edit_dist - edit_offset
         ref_stop += ref_shift
         #print(f"post-{cigar=}")
         
@@ -1094,12 +1294,9 @@ def align_read(
         a.reference_start = ref_stop
         # Replace with the better CIGAR from fragment alignment
         a.cigar = cigar
-        
-        if 15 > abs(a.reference_end - a.reference_start) - edit_dist:
-            return pysam_read
     
-    elif (a.get_tag("ED") > len(ref_sequence) * 0.3):
+    elif (a.get_tag("ED") > a.reference_length * 0.35) or 15 > abs(a.reference_end - a.reference_start) - edit_dist:
         return pysam_read
-    
+        
     # Return the completed alignment record, ready for output to BAM/SAM
     return a

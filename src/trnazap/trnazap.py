@@ -37,7 +37,7 @@ program_name = "tRNA_zap"
 version = "05_16_25_v0.1.2"
 
 def main(
-    unaligned_bam, inference_list, out_dir, out_pre, threads, model, all_alignments
+    unaligned_bam, inference_list, out_dir, out_pre, threads, model, secondary
 ):
     """Execute tRNA basecall alignment and inference workflow.
 
@@ -100,14 +100,14 @@ def main(
     monitor.start()
     
     p_list = make_parameter_list(
-        splt_reads,
+        threads,
         bam_header,
         inference_dict,
         ref_dict,
         unaligned_bam,
         out_dir,
         out_pre,
-        all_alignments,
+        secondary,
         monitor_counter.name
     )
 
@@ -135,6 +135,7 @@ def main(
         files = p.map(sort_bam, sort_p_list)
 
     merge_bam(files, out_dir, out_pre, threads)
+    
 
 
 if __name__ == "__main__":
@@ -180,16 +181,16 @@ if __name__ == "__main__":
         "-t",
         type=int,
         required=False,
-        default=18,  # Get number of available threads
+        default=8,  # Get number of available threads
     )
 
     parser.add_argument(
-        "--all_alignments",
-        "-a",
+        "--secondary",
+        "-s",
         default=False,
         action="store_true",
-        help="Perform alignemnts for all reference options"
-        + "note this is extremely costly",
+        help="Perform alignemnts for second highest classification" +
+        " select the better alignment of the two.",
     )
 
     parser.add_argument(
@@ -212,5 +213,5 @@ if __name__ == "__main__":
         FLAGS.out_pre,
         FLAGS.threads,
         FLAGS.model,
-        FLAGS.all_alignments,
+        FLAGS.secondary,
     )
