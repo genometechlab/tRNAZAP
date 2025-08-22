@@ -44,6 +44,11 @@ Thumbs.db
 *.sam
 *.fasta
 *.pth
+*.zir
+*.png
+*.jpg
+*.pdf
+*.svg
 
 # Experimental folders
 **test**
