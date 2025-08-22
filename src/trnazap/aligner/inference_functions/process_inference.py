@@ -3,6 +3,7 @@ from splitter.storages.inference_results import InferenceResults
 from splitter import ModelConfig, ModelLoader, Inference, ResultsVisualizer, ZIRReader
 import torch
 import os
+import numpy as np
 
 
 #TODO: Fix the logic for loading files
@@ -30,9 +31,13 @@ def from_files(inference_path_list):
             for read_result in zip_reader:
                 variable_region = read_result.variable_region_range
                 cls_ = lbls_to_cls[str(read_result.classification_pred)]
-                inference_obj[read_result.read_id] = (cls_, variable_region)
-            if len(inference_obj) >= 1000000:
-                break
+                sorted_classes = np.argsort(read_result.classification_probs)
+                secondary_cls = lbls_to_cls[str(sorted_classes[-2])]
+                tertiary_cls = lbls_to_cls[str(sorted_classes[-3])]
+                fragment = str(read_result.fragmentation_pred)
+                inference_obj[read_result.read_id] = (cls_, variable_region, secondary_cls, tertiary_cls, fragment)
+#            if len(inference_obj) >= 1000000:
+#                break
     return inference_obj
 
 def from_dir(dir_path):
@@ -47,9 +52,13 @@ def from_dir(dir_path):
             for read_result in zip_reader:
                 variable_region = read_result.variable_region_range
                 cls_ = lbls_to_cls[str(read_result.classification_pred)]
-                inference_obj[read_result.read_id] = (cls_, variable_region)
-                if len(inference_obj) >= 1000000 * (i+1):
-                    break
+                sorted_classes = np.argsort(read_result.classification_probs)
+                secondary_cls = lbls_to_cls[str(sorted_classes[-2])]
+                tertiary_cls = lbls_to_cls[str(sorted_classes[-3])]
+                fragment = str(read_result.fragmentation_pred)
+                inference_obj[read_result.read_id] = (cls_, variable_region, secondary_cls, tertiary_cls, fragment)
+#                if len(inference_obj) >= 1000000 * (i+1):
+#                    break
     return inference_obj
         
         

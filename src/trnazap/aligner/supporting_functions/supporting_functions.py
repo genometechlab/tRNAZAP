@@ -2,7 +2,7 @@
 
 This module focuses on tRNA alignment.
 """
-
+##TODO: I need to update it so we're not splitting reads anymore. Use the HASH!
 import os
 import pickle
 import subprocess
@@ -10,7 +10,7 @@ import itertools
 
 import pysam
 
-from aligner.alignment_functions.alignment import align_read
+from aligner.alignment_functions.alignment import align_read, shot_in_the_dark_alignment
 from aligner.progress_monitoring.progress import increment_counter
 
 from pathlib import Path
@@ -86,7 +86,7 @@ def split_read_ids(inference_dict, threads):
     return [set(itertools.islice(key_iter, size)) for size in sizes]
 
 def make_parameter_list(
-    read_id_set,
+    threads,
     header_dict,
     inference_dict,
     ref_dict,
@@ -117,7 +117,8 @@ def make_parameter_list(
     """
     return [
         (
-            read_id_set[i],
+            threads,
+            i,
             header_dict,
             inference_dict,
             ref_dict,
@@ -126,7 +127,7 @@ def make_parameter_list(
             all_alignments,
             monitor
         )
-        for i in range(len(read_id_set))
+        for i in range(threads)
     ]
 
 
@@ -181,8 +182,27 @@ def merge_bam(bam_paths, out_dir, out_pre, threads):
     
     subprocess.run(["rm"]+bam_paths)
 
+    subprocess.run(["samtools",
+                    "index",
+                    "-@",
+                    str(threads),
+                    os.path.join(out_dir, f"{out_pre}.sorted.bam")])
+
     return None
-                    
+
+def secondary_better(primary_read, secondary_read, min_ident_improvement):
+    if secondary_read.is_unmapped:
+        return False
+    if primary_read.is_unmapped and not secondary_read.is_unmapped:
+        return True
+        
+    primary_ref_len = primary_read.reference_end - primary_read.reference_start
+    primary_identity = (primary_ref_len - primary_read.get_tag('ED')) / primary_ref_len
+
+    secondary_ref_len = secondary_read.reference_end - secondary_read.reference_start
+    secondary_identity = (secondary_ref_len - secondary_read.get_tag('ED')) / secondary_ref_len
+
+    return (secondary_identity - min_ident_improvement) > primary_identity
 
 # Comments written with assistance from Anthropic Claudi Sonnet v4.0
 def make_sub_bam(args_list):
@@ -231,13 +251,14 @@ def make_sub_bam(args_list):
     """
     # Unpack the argument tuple - this format allows easy multiprocessing distribution
     (
-        read_id_set,  # Set of read IDs we want to include in output
+        threads,  # Set of read IDs we want to include in output
+        sub_index,    # This subprocess index for hashing reads
         header_dict,  # BAM header structure for output file
         inference_dict,  # Model predictions mapping read_id -> tRNA classification
         ref_dict,  # Reference sequences mapping ref_id -> sequence data
         unaligned_bam_path,  # Input BAM file with unaligned reads
         outpath,
-        all_alignments,
+        allow_secondary,
         monitor
     ) = args_list  # Output path for the new aligned BAM file
 
@@ -259,82 +280,90 @@ def make_sub_bam(args_list):
             # Filter reads: only process those that meet both criteria:
             # 1. Have inference predictions (model classified them as tRNA)
             # 2. Are in our target read ID set (additional filtering criterion)
-            if read.query_name not in read_id_set:
+
+            if int(read.query_name[:8], 16) % threads != sub_index:
                 continue
 
-            reads_processed += 1
-            if reads_processed % 5000 == 0:
-                increment_counter(monitor, 5000)
-            # Extract the predicted reference sequence information
-            # The inference model tells us which tRNA reference this read best matches
-            assigned_ref = inference_dict[read.query_name][0]
-            assigned_ref_sequence = ref_dict[assigned_ref][
-                "reference_seq"
-            ]
-            assigned_ref_index = ref_dict[assigned_ref]['reference_index']
-
-            # Perform the actual sequence alignment using our custom algorithm
-            # This creates a new AlignedSegment with proper CIGAR, coordinates, etc.
-            aligned_read = align_read(
-                read,
-                inference_dict[read.query_name],
-                assigned_ref_index,
-                assigned_ref_sequence,
-            )
-
+            if read.query_name not in inference_dict:
+                continue
+                
+            inference = read.query_name in inference_dict
+            
+            if inference:
+                i_dict = inference_dict[read.query_name]
+                
+                reads_processed += 1
+                if reads_processed % 5000 == 0:
+                    increment_counter(monitor, 5000)
+                # Extract the predicted reference sequence information
+                # The inference model tells us which tRNA reference this read best matches
+                assigned_ref = i_dict[0]
+                assigned_ref_sequence = ref_dict[assigned_ref][
+                    "reference_seq"
+                ]
+                assigned_ref_index = ref_dict[assigned_ref]['reference_index']
+    
+                # Perform the actual sequence alignment using our custom algorithm
+                # This creates a new AlignedSegment with proper CIGAR, coordinates, etc.
+                aligned_read = align_read(
+                    read,
+                    i_dict,
+                    assigned_ref_index,
+                    assigned_ref_sequence,
+                )
+                if i_dict[-1] == '1':
+                    aligned_read.set_tag('pf', 1) #Predicted Fragment
+    
+                #Attempt an alignment using the second highest classification
+                secondary_ref = i_dict[2]
+                if allow_secondary:
+                    secondary_read = align_read(
+                        read,
+                        i_dict,
+                        ref_dict[secondary_ref]['reference_index'],
+                        ref_dict[secondary_ref]['reference_seq'],
+                        secondary = True)
+    
+                if allow_secondary and secondary_better(aligned_read, secondary_read, min_ident_improvement = 0.05):
+                    aligned_read, secondary_read = secondary_read, aligned_read
+                    aligned_read.flag = 0
+                    aligned_read.mapping_quality = 60
+                    aligned_read.set_tag('ws', 1) #what does ws stand for? Was Second
+                    secondary_read.flag = 256
+                    secondary_read.mapping_quality = 0
+            
             # Handle unmapped reads - write them as-is without further processing
             # These are reads where the alignment algorithm couldn't find a good match
             if aligned_read.is_unmapped:
-                outf.write(aligned_read)
-                continue
+                i_dict = inference_dict[read.query_name]
+                top_three_ref_dict = {
+                    #ref_index, ref_sequence
+                    0: [ref_dict[i_dict[0]]['reference_index'], ref_dict[i_dict[0]]['reference_seq']],
+                    1: [ref_dict[i_dict[2]]['reference_index'], ref_dict[i_dict[2]]['reference_seq']],
+                    2: [ref_dict[i_dict[3]]['reference_index'], ref_dict[i_dict[3]]['reference_seq']]
+                }
+                aligned_read = shot_in_the_dark_alignment(read, top_three_ref_dict)
+                if aligned_read.is_unmapped:
+                    outf.write(aligned_read)
+                    continue
 
             # Validate the cigar string <- remove for perfomance boost?
-            _ = check_cigar(aligned_read.get_cigar_stats(), len(aligned_read.query_sequence), aligned_read.cigarstring, aligned_read.query_sequence, aligned_read.reference_id, aligned_read.reference_start, assigned_ref_sequence, aligned_read.get_tags())
+            _ = check_cigar(aligned_read.get_cigar_stats(), 
+                            len(aligned_read.query_sequence), 
+                            aligned_read.cigarstring, 
+                            aligned_read.query_sequence, 
+                            aligned_read.reference_id, 
+                            aligned_read.reference_start, 
+                            assigned_ref_sequence, 
+                            aligned_read.get_tags())
 
             # Write the successfully aligned and validated read to the output BAM
             outf.write(aligned_read)
+            if not aligned_read.has_tag('ls'):
+                if allow_secondary and not secondary_read.is_unmapped:
+                    outf.write(secondary_read)
 
-            # Check if a secondary alignments should be performed, if all_alignments
-            # Iterate and perform alignments giving a secondary mapping quality for
-            # Each of the subsequent alignments. If the all_alignments flag isn't set
-            # Then check for a 'gt' tag in the inference_dict. If there is a 'gt' in the
-            # Inference tag perform that alignment (mostly for alignment model
-            # Validation).
-            '''
-            if all_alignments:
-                predicted_class = assigned_ref
-                for ref_index in ref_dict:
-                    assigned_ref = ref_dict[ref_index]["reference_name"]
-                    assigned_ref_sequence = ref_dict[ref_index]["reference_seq"]
-                    if predicted_class == assigned_ref:
-                        continue
-
-                    aligned_read = align_read(
-                        read,
-                        inference_dict[read.query_name],
-                        assigned_ref,
-                        assigned_ref_sequence,
-                        secondary=True,
-                    )
-
-                    # Handle unmapped reads - ignore them
-                    # These are reads where the alignment algorithm
-                    # Couldn't find a good match.
-                    # Generally caused by the signal segmenter
-                    # Producing too narrow of a window
-                    if aligned_read.is_unmapped:
-                        continue
-
-                    # Validate the cigar string <- remove for perfomance boost?
-                    #_ = check_cigar(
-                    #    aligned_read.get_cigar_stats(), len(aligned_read.query_sequence)
-                    #)
-
-                    # Write the successfully aligned and validated read
-                    # To the output BAM
-                    outf.write(aligned_read)
-            '''
-    increment_counter(monitor, len(read_id_set) - reads_processed + (reads_processed % 5000))
+    increment_counter(monitor, (reads_processed % 5000))
     #if reads_processed % 1000 != 0:
     #    increment_counter(monitor, reads_processed % 1000)
     #if reads_processed != len(read_id_set):
