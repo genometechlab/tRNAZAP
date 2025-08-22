@@ -6,10 +6,12 @@ from pathlib import Path
 from typing import Optional, TYPE_CHECKING, Union
 from dataclasses import asdict
 import logging
+import uuid
 
 from .archive_format import (
     MAGIC_BYTES, FORMAT_VERSION, HEADER_SIZE,
-    COMPRESSION_ALGO, COMPRESSION_LEVEL, RECORD_MARKER
+    COMPRESSION_LEVEL, RECORD_MARKER,
+    INDEX_MAGIC, FOOTER_MAGIC, ENC_UUID16, ENC_UTF8LEN
 )
 
 if TYPE_CHECKING:
@@ -34,6 +36,8 @@ class ZIRWriter:
         self.file = None
         self.compressor = zstd.ZstdCompressor(level=COMPRESSION_LEVEL)
         self.record_count = 0
+        self._index_entries = []  # list[tuple[id_bytes: bytes, offset: int, size: int]]
+        self._index_encoding = None
         
     def __enter__(self):
         """Open file and write header."""
@@ -49,6 +53,10 @@ class ZIRWriter:
                 self.file.seek(len(MAGIC_BYTES) + 4)  # After magic + version
                 self.file.write(struct.pack('<I', self.record_count))
                 self.file.seek(current_pos)
+                
+                # write footer index
+                footer_start = self.file.tell()
+                self._write_footer_index(footer_start)
             finally:
                 self.file.close()
                 self.file = None
@@ -63,7 +71,11 @@ class ZIRWriter:
         self.file.write(struct.pack('<I', 0))
 
         # Prepare metadata
-        metadata_dict = asdict(self.metadata)
+        try:
+            metadata_dict = asdict(self.metadata)
+        except TypeError:
+            metadata_dict = dict(self.metadata)
+
 
         # Handle special types
         if metadata_dict.get('pod5_paths') is not None:
@@ -86,6 +98,31 @@ class ZIRWriter:
         # Pad to HEADER_SIZE
         self.file.write(b'\x00' * padding)
         
+
+    def _write_footer_index(self, footer_start: int) -> None:
+        enc = self._index_encoding or ENC_UTF8LEN
+        self.file.write(INDEX_MAGIC)
+        self.file.write(struct.pack('<H', enc))
+        self.file.write(struct.pack('<I', len(self._index_entries)))
+
+        if enc == ENC_UUID16:
+            for id_bytes, offset, size in self._index_entries:
+                # id_bytes must be 16
+                if len(id_bytes) != 16:
+                    raise ValueError("UUID index expects 16-byte IDs")
+                self.file.write(id_bytes)
+                self.file.write(struct.pack('<Q', offset))
+                self.file.write(struct.pack('<I', size))
+        else:  # ENC_UTF8LEN
+            for id_bytes, offset, size in self._index_entries:
+                self.file.write(struct.pack('<H', len(id_bytes)))
+                self.file.write(id_bytes)
+                self.file.write(struct.pack('<Q', offset))
+                self.file.write(struct.pack('<I', size))
+
+        self.file.write(FOOTER_MAGIC)
+        self.file.write(struct.pack('<Q', footer_start))
+        
     def add_result(self, read_result: 'ReadResult'):
         """
         Add a single read_result to the archive.
@@ -96,22 +133,51 @@ class ZIRWriter:
         if not self.file:
             raise RuntimeError("Writer not opened. Use 'with' statement.")
         
+        # Capture position before writing this record
+        record_start = self.file.tell()
+    
         # Prepare data for compression
         buffer = self._serialize_result(read_result)
         
         # Compress the buffer
         compressed = self.compressor.compress(buffer)
         
-        # Write record marker
+        # Write frame
         self.file.write(RECORD_MARKER)
-        
-        # Write compressed and uncompressed sizes
         self.file.write(struct.pack('<I', len(compressed)))
         self.file.write(struct.pack('<I', len(buffer)))
-        
-        # Write compressed data
         self.file.write(compressed)
         
+        # Compute framed size
+        framed_size = len(RECORD_MARKER) + 4 + 4 + len(compressed)
+        rid = read_result.read_id
+        id_tag = None
+        enc = None
+        try:
+            # Try UUID fast-path
+            # Accept both 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx' and uppercase
+            u = uuid.UUID(rid)
+            id_tag = u.bytes   # 16 bytes
+            enc = ENC_UUID16
+        except Exception:
+            rb = rid.encode('utf-8')
+            if len(rb) > 0xFFFF:
+                raise ValueError("read_id too long for uint16 length")
+            id_tag = rb
+            enc = ENC_UTF8LEN
+
+        # Enforce single encoding per file (first record decides)
+        if self._index_encoding is None:
+            self._index_encoding = enc
+        elif self._index_encoding != enc:
+            # If mixed, fall back to UTF8_LEN (rare; or you can raise)
+            if self._index_encoding == ENC_UUID16 and enc == ENC_UTF8LEN:
+                # convert previous UUID entries to UTF8 if needed — simpler: just raise
+                raise ValueError("Mixed read_id formats detected; prefer consistent UUIDs.")
+            else:
+                raise ValueError("Mixed read_id formats detected.")
+
+        self._index_entries.append((id_tag, record_start, framed_size))
         self.record_count += 1
 
     def _serialize_result(self, read_result):
@@ -156,33 +222,6 @@ class ZIRWriter:
             buffer.extend(array.tobytes())
         
         return bytes(buffer)
-    
-    
-
-class ZIRShardManager:
-    """Manages writing to ZIR files with optional sharding."""
-    
-    def __init__(
-        self,
-        base_path: Path,
-        metadata: 'InferenceMetadata',
-        shard_size: Optional[int] = None,
-    ):
-        self.base_path = Path(base_path)
-        self.metadata = metadata
-        self.shard_size = shard_size
-        self.current_shard = 0
-        self.current_writer: Optional[ZIRWriter] = None
-        self.current_count = 0
-        self.total_reads = 0
-        
-        # Process and validate base path
-        self._process_base_path(base_path)
-        
-        # Create necessary directories
-        self._ensure_directories()
-        
-        self._open_new_shard()
         
         
 class ZIRShardManager:
@@ -282,15 +321,6 @@ class ZIRShardManager:
         self.current_writer.add_result(read_result)
         self.current_count += 1
         self.total_reads += 1
-    
-    def _get_shard_path(self) -> Path:
-        """Generate shard filename."""
-        if self.shard_size is None:
-            return self.base_path
-        
-        base_stem = self.base_path.stem
-        suffix = self.base_path.suffix or '.zir'
-        return self.base_path.parent / f"{base_stem}_shard{self.current_shard:04d}{suffix}"
     
     def _get_shard_path(self) -> Path:
         """Generate shard filename based on mode."""

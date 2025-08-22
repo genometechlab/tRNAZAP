@@ -14,6 +14,12 @@ RECORD_MARKER = b'REC\x00'  # Marks start of each record
 ARRAY_TYPE_CLASSIFICATION = 1
 ARRAY_TYPE_SEQ2SEQ = 2
 
+# TOC
+INDEX_MAGIC  = b"ZIRINDEX"
+FOOTER_MAGIC = b"ZIRFOOT1"
+ENC_UUID16   = 1
+ENC_UTF8LEN  = 2
+
 # Record structure documentation:
 """
 Record structure (in order):
