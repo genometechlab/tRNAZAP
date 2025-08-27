@@ -4,6 +4,7 @@ from splitter import ModelConfig, ModelLoader, Inference, ResultsVisualizer, ZIR
 import torch
 import os
 import numpy as np
+from tqdm import tqdm
 
 
 #TODO: Fix the logic for loading files
@@ -26,6 +27,7 @@ def load_inference_obj(inference_path):
 def from_files(inference_path_list):
     inference_obj={}
     for pth in inference_path_list:
+        print(f"Loading Single File: {pth}")
         with ZIRReader(pth, index=False) as zip_reader:
             lbls_to_cls = zip_reader.metadata.label_names
             for read_result in zip_reader:
@@ -36,15 +38,13 @@ def from_files(inference_path_list):
                 tertiary_cls = lbls_to_cls[str(sorted_classes[-3])]
                 fragment = str(read_result.fragmentation_pred)
                 inference_obj[read_result.read_id] = (cls_, variable_region, secondary_cls, tertiary_cls, fragment)
-#            if len(inference_obj) >= 1000000:
-#                break
     return inference_obj
 
 def from_dir(dir_path):
     files = [f for f in os.listdir(dir_path) if f[-4:] == ".zir"]
-    print(files)
+    print(f"Loading inference files in: {dir_path}")
     inference_obj = {}
-    for i, pth in enumerate(files):
+    for i, pth in tqdm(enumerate(files)):
         pth = os.path.join(dir_path, pth)
         print(pth)
         with ZIRReader(pth, index=False) as zip_reader:
@@ -57,8 +57,6 @@ def from_dir(dir_path):
                 tertiary_cls = lbls_to_cls[str(sorted_classes[-3])]
                 fragment = str(read_result.fragmentation_pred)
                 inference_obj[read_result.read_id] = (cls_, variable_region, secondary_cls, tertiary_cls, fragment)
-#                if len(inference_obj) >= 1000000 * (i+1):
-#                    break
     return inference_obj
         
         

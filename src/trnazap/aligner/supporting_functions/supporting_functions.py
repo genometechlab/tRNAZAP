@@ -269,11 +269,13 @@ def make_sub_bam(args_list):
 
     #Count worker reads processed for shared progress monitoring
     reads_processed = 0
-    
+    pi_reads = 0
+    seen_reads = 0
     
     # Create the output BAM file with proper header information
     # Using context manager ensures file is properly closed even if errors occur
     with pysam.AlignmentFile(outpath, "w", header=header_dict) as outf:
+        counted_pi_reads = set()
         # Iterate through all reads in the input BAM file
         # until_eof=True ensures we read the entire file, not just aligned regions
         for read in ua_bam.fetch(until_eof=True):
@@ -281,20 +283,26 @@ def make_sub_bam(args_list):
             # 1. Have inference predictions (model classified them as tRNA)
             # 2. Are in our target read ID set (additional filtering criterion)
 
+            if read.has_tag('pi'):
+                pi = read.get_tag('pi')
+                if pi not in counted_pi_reads and int(pi[:8], 16) % threads == sub_index and pi in inference_dict:
+                    counted_pi_reads.add(pi)
+                    reads_processed += 1
+                    if reads_processed % 5000 == 0:
+                        increment_counter(monitor, 5000)
+                continue
+        
             if int(read.query_name[:8], 16) % threads != sub_index:
                 continue
-
+        
             if read.query_name not in inference_dict:
                 continue
-                
+            
             inference = read.query_name in inference_dict
             
             if inference:
                 i_dict = inference_dict[read.query_name]
                 
-                reads_processed += 1
-                if reads_processed % 5000 == 0:
-                    increment_counter(monitor, 5000)
                 # Extract the predicted reference sequence information
                 # The inference model tells us which tRNA reference this read best matches
                 assigned_ref = i_dict[0]
@@ -324,14 +332,17 @@ def make_sub_bam(args_list):
                         ref_dict[secondary_ref]['reference_seq'],
                         secondary = True)
     
-                if allow_secondary and secondary_better(aligned_read, secondary_read, min_ident_improvement = 0.05):
+                if allow_secondary and secondary_better(aligned_read, secondary_read, min_ident_improvement = 0.001):
                     aligned_read, secondary_read = secondary_read, aligned_read
                     aligned_read.flag = 0
                     aligned_read.mapping_quality = 60
                     aligned_read.set_tag('ws', 1) #what does ws stand for? Was Second
                     secondary_read.flag = 256
                     secondary_read.mapping_quality = 0
-            
+
+            reads_processed += 1
+            if reads_processed % 5000 == 0:
+                increment_counter(monitor, 5000)
             # Handle unmapped reads - write them as-is without further processing
             # These are reads where the alignment algorithm couldn't find a good match
             if aligned_read.is_unmapped:
@@ -362,8 +373,9 @@ def make_sub_bam(args_list):
             if not aligned_read.has_tag('ls'):
                 if allow_secondary and not secondary_read.is_unmapped:
                     outf.write(secondary_read)
-
+                    
     increment_counter(monitor, (reads_processed % 5000))
+
     #if reads_processed % 1000 != 0:
     #    increment_counter(monitor, reads_processed % 1000)
     #if reads_processed != len(read_id_set):
