@@ -61,11 +61,13 @@ class TransformerZAM_multitask(nn.Module):
 
         # Token-level classification head
         self.token_classifier = nn.Linear(hidden_size, num_classes_seq2seq)
-
-    def forward(self, signal: torch.Tensor, length: torch.Tensor):
+        
+    def _prep_embeddings_and_mask(self, signal: torch.Tensor, length: torch.Tensor):
         """
-        signal: Tensor of shape [batch_size, seq_len, input_dim]
-        lengths: Tensor of shape [batch_size], unpadded lengths
+        Returns:
+          embedded: [B, T+1, D]  (with CLS prepended, PE added, pads zeroed)
+          padding_mask: [B, T+1] (True = pad)
+          seq_len: int (original T without CLS)
         """
         batch_size, seq_len, _ = signal.shape
         seq_len_plus_cls = seq_len + 1
@@ -91,9 +93,18 @@ class TransformerZAM_multitask(nn.Module):
         else:
             abs_pe = self.positional_encoding(seq_len).to(embedded.device)  # [1, T, D]
             embedded[:, 1:] += abs_pe * (~padding_mask[:, 1:]).unsqueeze(-1)
-            
-        # Optionally wipe padded slots completely
+
+        # Wipe padded slots completely
         embedded[padding_mask] = 0.0
+        
+        return embedded, padding_mask
+    
+    def forward(self, signal: torch.Tensor, length: torch.Tensor):
+        """
+        signal: Tensor of shape [batch_size, seq_len, input_dim]
+        lengths: Tensor of shape [batch_size], unpadded lengths
+        """
+        embedded, padding_mask = self._prep_embeddings_and_mask(signal, length)
     
         # Transformer encoder
         encoded = self.encoder(embedded, padding_mask)  # [B, T+1, D]
@@ -109,3 +120,71 @@ class TransformerZAM_multitask(nn.Module):
             "classification": seq_logits,
             "segmentation": token_logits
         }
+
+    @torch.no_grad()
+    def get_cls_attention(self, signal: torch.Tensor, length: torch.Tensor, average_heads: bool = True):
+        """
+        Runs ONLY the encoder and returns last-layer CLS->token attention as [B, T].
+        - Does not compute classification/segmentation heads.
+        - Does not modify module state (uses a temporary forward hook).
+        - average_heads=True returns the head-averaged map; if False and your
+          PyTorch returns per-head weights, this will return [B, H, T].
+
+        Returns:
+          cls_to_tokens: [B, T]  (or [B, H, T] if average_heads=False and available)
+        """
+        self.eval()  # ensure deterministic layers like dropout are off
+
+        embedded, padding_mask = self._prep_embeddings_and_mask(signal, length)
+
+        attn_cache = {"w": None}
+
+        # get last encoder layer's MHA
+        last_layer = self.encoder.encoder.layers[-1]
+        mha = last_layer.self_attn
+
+        # temporary hook to capture attention weights
+        def _mha_hook(module, inputs, outputs):
+            # outputs = (attn_output, attn_weights)
+            if isinstance(outputs, tuple) and len(outputs) == 2:
+                attn_cache["w"] = outputs[1]
+
+        handle = mha.register_forward_hook(_mha_hook)
+        try:
+            _ = self.encoder(embedded, padding_mask)  # run backbone only
+        finally:
+            handle.remove()
+
+        attn = attn_cache["w"]
+        if attn is None:
+            # Fallback: some PyTorch versions can elide weights if not requested.
+            # In stock nn.TransformerEncoderLayer they’re returned; if not, raise.
+            raise RuntimeError("Could not capture attention weights from last layer.")
+
+        # Normalize to common shapes
+        # Possible shapes:
+        #   [B, L_q, L_k]              (head-averaged)
+        #   [B, num_heads, L_q, L_k]   (per-head)
+        if attn.dim() == 4:  # per-head
+            # pick CLS row and drop CLS column
+            cls_to_all = attn[:, :, 0, :]     # [B, H, T+1]
+            cls_to_tokens = cls_to_all[:, :, 1:]  # [B, H, T]
+            # mask pads on key side
+            key_pad = padding_mask[:, 1:].unsqueeze(1)  # [B, 1, T]
+            cls_to_tokens = cls_to_tokens.masked_fill(key_pad, 0.0)
+            # renormalize over unpadded keys
+            denom = cls_to_tokens.sum(dim=-1, keepdim=True).clamp_min(1e-8)
+            cls_to_tokens = cls_to_tokens / denom
+            if average_heads:
+                cls_to_tokens = cls_to_tokens.mean(dim=1)  # [B, T]
+            return cls_to_tokens
+        elif attn.dim() == 3:  # head-averaged
+            cls_to_all = attn[:, 0, :]      # [B, T+1]
+            cls_to_tokens = cls_to_all[:, 1:]  # [B, T]
+            key_pad = padding_mask[:, 1:]      # [B, T]
+            cls_to_tokens = cls_to_tokens.masked_fill(key_pad, 0.0)
+            denom = cls_to_tokens.sum(dim=-1, keepdim=True).clamp_min(1e-8)
+            cls_to_tokens = cls_to_tokens / denom
+            return cls_to_tokens
+        else:
+            raise RuntimeError(f"Unexpected attention weight shape: {attn.shape}")
