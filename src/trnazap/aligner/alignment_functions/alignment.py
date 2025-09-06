@@ -1118,12 +1118,13 @@ def shot_in_the_dark_alignment(pysam_read, top_three_ref_dict):
         return pysam_read
         
     a = pysam.AlignedSegment()
-    a.query_name = pysam_read.query_name              # Unique read identifier
-    a.query_sequence = pysam_read.query_sequence      # Complete original sequence (not just tRNA part)
-    a.query_qualities = pysam_read.query_qualities    # Phred quality scores for each base
+    a.query_name = pysam_read.query_name               # Unique read identifier
+    a.query_sequence = pysam_read.query_sequence       # Complete original sequence (not just tRNA part)
+    a.query_qualities = pysam_read.query_qualities     # Phred quality scores for each base
     a.reference_id = top_three_ref_dict[best_index][0] # Which reference this aligns to
-    a.flag = 0                                        # Start with unmapped flag (will update if secondary)
-    a.tags = pysam_read.get_tags()                    # Preserve any custom tags (RG, BC, etc.)
+    a.flag = 0                                         # Start with unmapped flag (will update if secondary)
+    a.tags = pysam_read.get_tags()                     # Preserve any custom tags (RG, BC, etc.)
+    a.mapping_quality = 3 - best_index
     a.set_tag('ls', best_index) #What is ls? last shot?
     a.reference_start = best_result[2]
     a.cigar = best_result[0]

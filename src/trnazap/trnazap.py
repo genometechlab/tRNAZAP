@@ -10,6 +10,7 @@ os.environ['OMP_NUM_THREADS'] = '1'
 import argparse
 import sys
 from multiprocessing import Pool
+import time
 
 import numba
 numba.set_num_threads(1)
@@ -28,7 +29,8 @@ from aligner.supporting_functions.supporting_functions import (
 from aligner.progress_monitoring.progress import (
     create_shared_counter,
     increment_counter,
-    create_monitor
+    create_monitor,
+    get_counter_value
 )
 
 from aligner.inference_functions.process_inference import load_inference_obj
@@ -115,9 +117,24 @@ def main(
         files = p.map(make_sub_bam, p_list)
 
     print("Finished Aligning")
+    # Update counter to complete the progress bar
+    current_count = get_counter_value(monitor_counter.name)
+    missing = len(inference_dict) - current_count  # You'll need to have total_work defined
+    
+    if missing > 0:
+        print(f"Updating counter with {missing} missing reads")
+        increment_counter(monitor_counter.name, missing)
+        
+        # Give monitor thread time to see the update and reach 100%
+        time.sleep(0.2)
+    elif missing < 0:
+        print(f"WARNING: Counter exceeded expected by {-missing}")
+    
+    # Now check and stop the monitor
     print(f"Monitor alive before join: {monitor.is_alive()}")
     monitor.join(timeout=5)
     print(f"Monitor alive after join: {monitor.is_alive()}")
+
     if monitor.is_alive():
         print("WARNING: Monitor thread still running!")
     monitor_counter.close()
