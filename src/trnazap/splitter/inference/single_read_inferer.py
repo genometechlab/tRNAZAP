@@ -92,7 +92,10 @@ class SingleReadInference(InferenceBase):
         )
         
         if return_attention_scores and hasattr(self.model, 'get_cls_attention'):
-            attention_scores = self.model.get_cls_attention(**inputs, average_heads=True)
-            return result, attention_scores
+            cls_scores, cls_attn, cls_attn_mean = self.model.get_cls_attention(**inputs, average_heads=True)
+            cls_scores = cls_scores.cpu().numpy()[0]
+            cls_attn = cls_attn.cpu().numpy()[0]
+            cls_attn_mean = cls_attn_mean.cpu().numpy()[0]
+            return result, (cls_scores, cls_attn, cls_attn_mean)
         else:
             return result
