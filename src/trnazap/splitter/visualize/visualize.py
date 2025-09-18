@@ -3,6 +3,7 @@ import torch
 import logging
 import matplotlib.pyplot as plt
 import pod5
+import warnings
 from matplotlib.patches import Rectangle
 from matplotlib.transforms import blended_transform_factory
 from pathlib import Path
@@ -34,6 +35,7 @@ VIZ_PARAMS = {
     "pred_y": 1100,
     "pred_smooth_y": 1250,
     "prob_y": 1400,
+    "gt": 1550,
     "bar_height": 100,
     "prob_scale": 200,
 }
@@ -82,8 +84,9 @@ class ResultsVisualizer:
         apply_crf_smoothing: bool = True,
         plot_probabilities: bool = True,
         plot_signal: bool = True,
+        ground_truth_segmentations: List[int] = None,
         figure_size: Tuple[int, int] = (16, 8),
-        title_prefix: str = "Read",        # NEW: customizable title preface
+        title_prefix: str = "Read",
     ) -> Union[plt.Figure, List[plt.Figure]]:
         single_input = isinstance(read_results, ReadResult)
         if single_input:
@@ -102,6 +105,7 @@ class ResultsVisualizer:
                 apply_crf_smoothing=apply_crf_smoothing,
                 plot_probabilities=plot_probabilities,
                 plot_signal=plot_signal,
+                ground_truth_segmentations=ground_truth_segmentations,
                 figure_size=figure_size,
                 title_prefix=title_prefix,
             )
@@ -115,15 +119,17 @@ class ResultsVisualizer:
         apply_crf_smoothing: bool,
         plot_probabilities: bool,
         plot_signal: bool,
+        ground_truth_segmentations: List[int],
         figure_size: Tuple[int, int],
         title_prefix: str,
     ) -> plt.Figure:
+        plot_segmentation = True
         if read_result.segmentation_logits is None:
-            raise ValueError(f"No segmentation logits for read {read_result.read_id}")
+            warnings.warn(f"No segmentation logits for read {read_result.read_id}")
+            plot_segmentation = False
 
         # Prepare data
         signal_scaled = self._prepare_signal(signal)
-        predictions_smooth = self._apply_crf_smoothing(read_result.segmentation_logits) if apply_crf_smoothing else None
 
         # Figure
         fig, ax = plt.subplots(figsize=figure_size, constrained_layout=True)
@@ -132,16 +138,22 @@ class ResultsVisualizer:
         if plot_signal:
             self._plot_signal(ax, signal_scaled)
 
-        # Predictions
-        self._plot_predictions(ax, read_result.segmentation_preds, read_result.chunk_size,
-                               "Pred.", VIZ_PARAMS["pred_y"])
-        if predictions_smooth is not None:
-            self._plot_predictions(ax, predictions_smooth, read_result.chunk_size,
-                                   "Pred. (CRF)", VIZ_PARAMS["pred_smooth_y"])
+        if plot_segmentation:
+            # Predictions
+            self._plot_predictions(ax, read_result.segmentation_preds, read_result.chunk_size,
+                                "Pred.", VIZ_PARAMS["pred_y"])
+            if predictions_smooth is not None:
+                predictions_smooth = self._apply_crf_smoothing(read_result.segmentation_logits) if apply_crf_smoothing else None
+                self._plot_predictions(ax, predictions_smooth, read_result.chunk_size,
+                                    "Pred. (CRF)", VIZ_PARAMS["pred_smooth_y"])
 
-        # Probabilities
-        if plot_probabilities and read_result.segmentation_probs is not None:
-            self._plot_probabilities(ax, read_result.segmentation_probs, read_result.chunk_size)
+            # Probabilities
+            if plot_probabilities and read_result.segmentation_probs is not None:
+                self._plot_probabilities(ax, read_result.segmentation_probs, read_result.chunk_size)
+                
+        if ground_truth_segmentations is not None:
+            self._plot_predictions(ax, ground_truth_segmentations, read_result.chunk_size,
+                    "GT", VIZ_PARAMS["gt"])
 
         # Format
         self._format_figure(ax, read_result.read_id, len(signal_scaled), title_prefix=title_prefix)
