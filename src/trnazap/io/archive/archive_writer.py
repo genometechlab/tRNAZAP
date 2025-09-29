@@ -1,5 +1,7 @@
 import struct
 import json
+import os
+import io
 import numpy as np
 import zstandard as zstd
 from pathlib import Path
@@ -10,7 +12,7 @@ import uuid
 
 from .archive_format import (
     MAGIC_BYTES, FORMAT_VERSION, HEADER_SIZE,
-    COMPRESSION_LEVEL, RECORD_MARKER
+    COMPRESSION_LEVEL, RECORD_MARKER, BUFFER_SIZE
 )
 
 if TYPE_CHECKING:
@@ -20,144 +22,248 @@ logger = logging.getLogger(__name__)
 
 
 class ZIRWriter:
-    """Write inference results to ZIR archive format with dynamic logit support."""
-    
-    def __init__(self, path: Path, metadata: 'InferenceMetadata'):
-        """
-        Initialize writer.
-        
-        Args:
-            path: Output file path
-            metadata: Inference metadata
-        """
+    """High-performance ZIR archive writer with dynamic logits.
+
+    IO-optimized design notes:
+    - Uses a large buffered writer to minimize syscalls.
+    - Caches struct packers to reduce overhead.
+    - Streams zstd frames per record with checksums for integrity.
+    - Performs strict bounds checks (<=255 logits/keys, <=255 dims).
+    - Avoids unnecessary copies when possible (e.g., astype(copy=False)).
+
+    Record layout (per record):
+        RECORD_MARKER
+        compressed_size : uint32 LE
+        uncompressed_size : uint32 LE
+        compressed_payload : bytes[compressed_size]
+
+    Uncompressed payload layout:
+        read_id_len : uint16 LE
+        read_id     : utf8 bytes[read_id_len]
+        num_chunks  : int32 LE
+        chunk_size  : int32 LE
+        num_logits  : uint8
+        repeat num_logits times:
+            key_len : uint8
+            key     : utf8 bytes[key_len]
+            ndim    : uint8
+            shape   : uint32 LE [ndim]
+            data    : float32 little-endian bytes[prod(shape)*4]
+    """
+
+    __slots__ = (
+        "path",
+        "metadata",
+        "_file",
+        "_buf",
+        "_zstd",
+        "record_count",
+        "_S_U16",
+        "_S_U32",
+        "_S_I32",
+    )
+
+    def __init__(
+        self,
+        path: Path,
+        metadata: "InferenceMetadata",
+        *,
+        compression_level: int = COMPRESSION_LEVEL,
+        buffered_bytes: int = BUFFER_SIZE,
+        write_checksum: bool = True,
+    ) -> None:
         self.path = Path(path)
         self.metadata = metadata
-        self.file = None
-        self.compressor = zstd.ZstdCompressor(level=COMPRESSION_LEVEL)
+        self._file: Optional[io.BufferedWriter] = None
+        self._buf = buffered_bytes
+        self._zstd = zstd.ZstdCompressor(level=compression_level, write_checksum=write_checksum)
         self.record_count = 0
-        
-    def __enter__(self):
-        """Open file and write header."""
-        self.file = open(self.path, 'wb')
+
+        # Cached struct packers
+        self._S_U16 = struct.Struct("<H")
+        self._S_U32 = struct.Struct("<I")
+        self._S_I32 = struct.Struct("<i")
+
+    # ---------------- Context Manager ---------------- #
+    def __enter__(self) -> "ZIRWriter":
+        # Open with explicit buffering; binary exclusive create/truncate
+        raw = open(self.path, "wb", buffering=0)
+        self._file = io.BufferedWriter(raw, buffer_size=self._buf)
         self._write_header()
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        """Close file and update record count."""
-        if self.file:
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        if not self._file:
+            return
+        try:
+            # Seek and patch record_count (magic + version)
+            self._file.flush()
+            self._file.raw.seek(len(MAGIC_BYTES) + 4)
+            self._file.raw.write(self._S_U32.pack(self.record_count))
+            # Return to end to ensure consistent file position
+            self._file.raw.seek(0, os.SEEK_END)
+            self._file.flush()
             try:
-                current_pos = self.file.tell()
-                self.file.seek(len(MAGIC_BYTES) + 4)  # After magic + version
-                self.file.write(struct.pack('<I', self.record_count))
-                self.file.seek(current_pos)
-            finally:
-                self.file.close()
-                self.file = None
-            
-    def _write_header(self) -> None:
-        """Write archive header with metadata and padding."""
-        # Write magic bytes and version
-        self.file.write(MAGIC_BYTES)
-        self.file.write(struct.pack('<I', FORMAT_VERSION))
+                os.fsync(self._file.raw.fileno())
+            except Exception:
+                # fsync may be unavailable on some platforms; ignore
+                pass
+        finally:
+            self._file.close()
+            self._file = None
 
-        # Write placeholder for record count (will update on close)
-        self.file.write(struct.pack('<I', 0))
+    # ---------------- Public API ---------------- #
+    def add_result(self, read_result: "ReadResult") -> None:
+        """Append a single read result as a compressed record.
 
-        # Prepare metadata
-        metadata_dict = asdict(self.metadata)
-
-        # Handle special types
-        if metadata_dict.get('pod5_paths') is not None:
-            metadata_dict['pod5_paths'] = list(metadata_dict['pod5_paths'])
-
-        metadata_json = json.dumps(metadata_dict, default=str)
-        metadata_bytes = metadata_json.encode('utf-8')
-        metadata_len = len(metadata_bytes)
-
-        # Write metadata length and data
-        self.file.write(struct.pack('<I', metadata_len))
-        self.file.write(metadata_bytes)
-
-        # Check for padding
-        total_written = len(MAGIC_BYTES) + 4 + 4 + 4 + metadata_len
-        padding = HEADER_SIZE - total_written
-        if padding < 0:
-            raise ValueError(f"Metadata too large to fit in header: {metadata_len} bytes")
-
-        # Pad to HEADER_SIZE
-        self.file.write(b'\x00' * padding)
-        
-    def add_result(self, read_result: 'ReadResult'):
-        """
-        Add a single read_result to the archive.
-        
         Args:
-            read_result: ReadResult to add
+            read_result: Object with fields
+                - read_id (str)
+                - num_chunks (int)
+                - chunk_size (int)
+                - _logits (Mapping[str, np.ndarray-like])
         """
-        if not self.file:
-            raise RuntimeError("Writer not opened. Use 'with' statement.")
-        
-        # Prepare data for compression
-        buffer = self._serialize_result(read_result)
-        
-        # Compress the buffer
-        compressed = self.compressor.compress(buffer)
-        
-        # Write record marker
-        self.file.write(RECORD_MARKER)
-        
-        # Write compressed and uncompressed sizes
-        self.file.write(struct.pack('<I', len(compressed)))
-        self.file.write(struct.pack('<I', len(buffer)))
-        
-        # Write compressed data
-        self.file.write(compressed)
-        
+        if self._file is None:
+            raise RuntimeError("Writer not opened. Use 'with ZIRWriter(...) as w:'")
+
+        payload = self._serialize_result(read_result)
+
+        # Compress using a streaming frame into an in-memory buffer to avoid double copies
+        # (zstd supports one-shot compress too; streaming here gives us checksum & future options)
+        cbuf = io.BytesIO()
+        with self._zstd.stream_writer(cbuf, closefd=False) as zw:
+            zw.write(payload)
+        compressed = cbuf.getvalue()
+
+        # Write record marker + sizes + frame
+        f = self._file
+        f.write(RECORD_MARKER)
+        f.write(self._S_U32.pack(len(compressed)))
+        f.write(self._S_U32.pack(len(payload)))
+        f.write(compressed)
+
         self.record_count += 1
 
-    def _serialize_result(self, read_result):
-        """
-        Serialize result into a byte buffer (before compression).
-        Now supports dynamic logit keys.
-        
-        Returns:
-            bytes: uncompressed binary data for a single record
-        """
-        buffer = bytearray()
-        
-        # Write read ID
-        read_id_bytes = read_result.read_id.encode('utf-8')
-        buffer.extend(struct.pack('<H', len(read_id_bytes)))  # 2 bytes for length
-        buffer.extend(read_id_bytes)
-        
-        # Write basic metadata
-        buffer.extend(struct.pack('<i', read_result.num_chunks))  # 4 bytes
-        buffer.extend(struct.pack('<i', read_result.chunk_size))  # 4 bytes
-        
-        # NEW: Write number of logit entries
-        logit_entries = read_result._logits
-        buffer.extend(struct.pack('<B', len(logit_entries)))  # 1 byte for count (max 255 tasks)
-        
-        # Write each logit entry dynamically
-        for key, logits in logit_entries.items():
-            # Write key name
-            key_bytes = key.encode('utf-8')
-            buffer.extend(struct.pack('<B', len(key_bytes)))  # 1 byte for key length
-            buffer.extend(key_bytes)
-            
-            # Write array info
-            array = logits.astype('float32')
-            buffer.extend(struct.pack('<B', array.ndim))  # 1 byte for number of dimensions
-            
-            # Write shape
-            for dim in array.shape:
-                buffer.extend(struct.pack('<I', dim))  # 4 bytes per dimension
-            
-            # Write data
-            buffer.extend(array.tobytes())
-        
-        return bytes(buffer)
-        
+    # ---------------- Internal: Header ---------------- #
+    def _write_header(self) -> None:
+        assert self._file is not None
+        f = self._file
+
+        # Magic + version
+        f.write(MAGIC_BYTES)
+        f.write(self._S_U32.pack(FORMAT_VERSION))
+
+        # Placeholder for record_count
+        f.write(self._S_U32.pack(0))
+
+        # Metadata JSON (convert sets to lists, Path to str, etc.)
+        meta = asdict(self.metadata)
+        if meta.get("pod5_paths") is not None and not isinstance(meta["pod5_paths"], list):
+            meta["pod5_paths"] = list(meta["pod5_paths"])  # ensure JSON-serializable
+
+        meta_json = json.dumps(meta, ensure_ascii=False, separators=(",", ":"))
+        meta_bytes = meta_json.encode("utf-8")
+        meta_len = len(meta_bytes)
+
+        # Header layout reserves HEADER_SIZE; enforce fit
+        fixed = len(MAGIC_BYTES) + 4 + 4 + 4  # magic + version + record_count + meta_len
+        total = fixed + meta_len
+        padding = HEADER_SIZE - total
+        if padding < 0:
+            raise ValueError(
+                f"Metadata too large for fixed header: {meta_len} bytes (max {HEADER_SIZE - fixed})"
+            )
+
+        f.write(self._S_U32.pack(meta_len))
+        f.write(meta_bytes)
+        if padding:
+            f.write(b"\x00" * padding)
+
+    # ---------------- Internal: Serialization ---------------- #
+    def _serialize_result(self, rr: "ReadResult") -> bytes:
+        # Validate and prepare fields
+        read_id = rr.read_id
+        if not isinstance(read_id, str):
+            raise TypeError("read_id must be str")
+        read_id_b = read_id.encode("utf-8")
+        if len(read_id_b) > 0xFFFF:
+            raise ValueError("read_id is too long (>65535 bytes)")
+
+        num_chunks = int(rr.num_chunks)
+        chunk_size = int(rr.chunk_size)
+
+        logits = getattr(rr, "_logits", None)
+        if logits is None:
+            logits = {}
+        if not isinstance(logits, dict):
+            # Accept Mapping-like
+            logits = dict(logits)
+
+        n_entries = len(logits)
+        if n_entries > 255:
+            raise ValueError("At most 255 logit entries are supported")
+
+        # Build into a BytesIO (faster than repeatedly extending a bytearray for large blocks)
+        buf = io.BytesIO()
+
+        # read_id
+        buf.write(self._S_U16.pack(len(read_id_b)))
+        buf.write(read_id_b)
+
+        # basic metadata (kept signed for backward-compatibility with your reader)
+        buf.write(self._S_I32.pack(num_chunks))
+        buf.write(self._S_I32.pack(chunk_size))
+
+        # number of logits
+        buf.write(struct.pack("<B", n_entries))
+
+        # each logit block
+        for key, arr in logits.items():
+            if not isinstance(key, str):
+                raise TypeError("logit key must be str")
+            key_b = key.encode("utf-8")
+            if len(key_b) > 255:
+                raise ValueError(f"logit key '{key}' too long (>255 bytes)")
+
+            # Convert to float32 little-endian without unnecessary copies
+            a = np.asarray(arr)
+            if a.dtype != np.float32:
+                a = a.astype(np.float32, copy=False)
+
+            ndim = int(a.ndim)
+            if not (1 <= ndim <= 255):
+                raise ValueError(f"ndim must be in [1, 255], got {ndim}")
+
+            # shape checks
+            shape = tuple(int(d) for d in a.shape)
+            for d in shape:
+                if d < 0:
+                    raise ValueError("negative dimensions are not allowed")
+                # 32-bit unsigned shape components
+                if d > 0xFFFFFFFF:
+                    raise ValueError("dimension too large for uint32 shape")
+
+            # key
+            buf.write(struct.pack("<B", len(key_b)))
+            buf.write(key_b)
+
+            # ndim + shape
+            buf.write(struct.pack("<B", ndim))
+            if ndim == 1:
+                buf.write(self._S_U32.pack(shape[0]))
+            else:
+                # pack as <{ndim}I
+                buf.write(struct.pack("<" + "I" * ndim, *shape))
+
+            # data (raw bytes, little-endian float32)
+            # Ensure C-contiguity for predictable frombuffer layout on read
+            if not a.flags.c_contiguous:
+                a = np.ascontiguousarray(a, dtype=np.float32)
+            mv = memoryview(a)
+            buf.write(mv.cast("b"))  # zero-copy write when possible
+
+        return buf.getvalue()
+
         
 class ZIRShardManager:
     """Manages writing to ZIR files with optional sharding and comprehensive path handling."""

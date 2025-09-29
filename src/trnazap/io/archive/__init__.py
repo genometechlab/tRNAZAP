@@ -5,7 +5,9 @@ from .archive_format import (
     FORMAT_VERSION,
     HEADER_SIZE,
     COMPRESSION_ALGO,
-    COMPRESSION_LEVEL
+    COMPRESSION_LEVEL,
+    BUFFER_SIZE,
+    PREVIEW_MAX
 )
 
 __all__ = [
@@ -15,5 +17,7 @@ __all__ = [
     'FORMAT_VERSION',
     'HEADER_SIZE',
     'COMPRESSION_ALGO',
-    'COMPRESSION_LEVEL'
+    'COMPRESSION_LEVEL',
+    'BUFFER_SIZE',
+    'PREVIEW_MAX'
 ]

@@ -13,12 +13,8 @@ COMPRESSION_LEVEL = 3      # Balance between speed and size
 RECORD_MARKER = b'REC\x00'  # Marks start of each record
 ARRAY_TYPE_CLASSIFICATION = 1
 ARRAY_TYPE_SEQ2SEQ = 2
-
-# TOC
-INDEX_MAGIC  = b"ZIRINDEX"
-FOOTER_MAGIC = b"ZIRFOOT1"
-ENC_UUID16   = 1
-ENC_UTF8LEN  = 2
+BUFFER_SIZE = 1 << 20 # 1 MiB
+PREVIEW_MAX = 512
 
 # Record structure documentation:
 """
