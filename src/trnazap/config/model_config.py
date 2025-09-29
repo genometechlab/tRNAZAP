@@ -147,7 +147,7 @@ class ModelLoader:
         """Build model from configuration."""
         
         model_name = self.config.model_name 
-        module = importlib.import_module("trnazap.splitter.model")
+        module = importlib.import_module("trnazap.model")
         model_class = getattr(module, model_name) 
 
         model = model_class(

@@ -142,8 +142,8 @@ class ResultsVisualizer:
             # Predictions
             self._plot_predictions(ax, read_result.segmentation_preds, read_result.chunk_size,
                                 "Pred.", VIZ_PARAMS["pred_y"])
-            if predictions_smooth is not None:
-                predictions_smooth = self._apply_crf_smoothing(read_result.segmentation_logits) if apply_crf_smoothing else None
+            if apply_crf_smoothing:
+                predictions_smooth = self._apply_crf_smoothing(read_result.segmentation_logits)
                 self._plot_predictions(ax, predictions_smooth, read_result.chunk_size,
                                     "Pred. (CRF)", VIZ_PARAMS["pred_smooth_y"])
 

@@ -68,3 +68,6 @@ label_names:
  48: 'Escherichia_coli_str_K-12_substr_MG1655_tRNA-Val-TAC-1-1'
  49: 'Escherichia_coli_str_K-12_substr_MG1655_tRNA-fMet-CAT-1-1'
  50: 'Escherichia_coli_str_K-12_substr_MG1655_tRNA-fMet-CAT-2-1'
+ 48: 'Escherichia_coli_str_K-12_substr_MG1655_tRNA-Val-TAC-1-1'
+ 49: 'Escherichia_coli_str_K-12_substr_MG1655_tRNA-fMet-CAT-1-1'
+ 50: 'Escherichia_coli_str_K-12_substr_MG1655_tRNA-fMet-CAT-2-1'

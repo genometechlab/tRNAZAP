@@ -1,0 +1,101 @@
+chunk_size: 54
+max_seq_len: 1200
+num_classes: 79
+num_classes_seq2seq: 4
+model_name: "TransformerZAM_multitask_wfrag"
+nhead: 4
+num_layers: 4
+hidden_size: 256
+dim_feedforward: 512
+dropout: 0.1
+positional_encoding_type: "sinusoidal"
+
+# Data type
+float_dtype: "float16"  # Options: float16 float32 float64
+
+# Model checkpoint
+checkpoint_path: "../checkpoints/zap_s54_c79_IVTyeast_fragmented.pth"
+
+label_names:
+ 0: 'Saccharomyces_cerevisiae_tRNA-Ala-AGC-1-1'
+ 1: 'Saccharomyces_cerevisiae_tRNA-Ala-TGC-1-1'
+ 2: 'Saccharomyces_cerevisiae_tRNA-Arg-ACG-1-1'
+ 3: 'Saccharomyces_cerevisiae_tRNA-Arg-ACG-2-1'
+ 4: 'Saccharomyces_cerevisiae_tRNA-Arg-CCG-1-1'
+ 5: 'Saccharomyces_cerevisiae_tRNA-Arg-CCT-1-1'
+ 6: 'Saccharomyces_cerevisiae_tRNA-Arg-TCT-1-1'
+ 7: 'Saccharomyces_cerevisiae_tRNA-Asn-GTT-1-1'
+ 8: 'Saccharomyces_cerevisiae_tRNA-Asp-GTC-1-1'
+ 9: 'Saccharomyces_cerevisiae_tRNA-Asp-GTC-2-1'
+ 10: 'Saccharomyces_cerevisiae_tRNA-Cys-GCA-1-1'
+ 11: 'Saccharomyces_cerevisiae_tRNA-Gln-CTG-1-1'
+ 12: 'Saccharomyces_cerevisiae_tRNA-Gln-TTG-1-1'  
+ 13: 'Saccharomyces_cerevisiae_tRNA-Gln-TTG-2-1'
+ 14: 'Saccharomyces_cerevisiae_tRNA-Gln-TTG-3-1'
+ 15: 'Saccharomyces_cerevisiae_tRNA-Glu-CTC-1-1'
+ 16: 'Saccharomyces_cerevisiae_tRNA-Glu-TTC-1-1'
+ 17: 'Saccharomyces_cerevisiae_tRNA-Glu-TTC-2-1'
+ 18: 'Saccharomyces_cerevisiae_tRNA-Gly-CCC-1-1'
+ 19: 'Saccharomyces_cerevisiae_tRNA-Gly-CCC-2-1'
+ 20: 'Saccharomyces_cerevisiae_tRNA-Gly-GCC-1-1'
+ 21: 'Saccharomyces_cerevisiae_tRNA-Gly-TCC-1-1'
+ 22: 'Saccharomyces_cerevisiae_tRNA-His-GTG-1-1'
+ 23: 'Saccharomyces_cerevisiae_tRNA-Ile-AAT-1-1'
+ 24: 'Saccharomyces_cerevisiae_tRNA-Ile-TAT-1-1'
+ 25: 'Saccharomyces_cerevisiae_tRNA-Ile-TAT-2-1'
+ 26: 'Saccharomyces_cerevisiae_tRNA-Leu-CAA-1-1'
+ 27: 'Saccharomyces_cerevisiae_tRNA-Leu-GAG-1-1'
+ 28: 'Saccharomyces_cerevisiae_tRNA-Leu-TAA-1-1'
+ 29: 'Saccharomyces_cerevisiae_tRNA-Leu-TAG-1-1'
+ 30: 'Saccharomyces_cerevisiae_tRNA-Lys-CTT-1-1'
+ 31: 'Saccharomyces_cerevisiae_tRNA-Lys-TTT-1-1'
+ 32: 'Saccharomyces_cerevisiae_tRNA-Met-CAT-1-1'
+ 33: 'Saccharomyces_cerevisiae_tRNA-Phe-GAA-1-1'
+ 34: 'Saccharomyces_cerevisiae_tRNA-Phe-GAA-2-1'
+ 35: 'Saccharomyces_cerevisiae_tRNA-Pro-AGG-1-1'
+ 36: 'Saccharomyces_cerevisiae_tRNA-Pro-TGG-1-1'
+ 37: 'Saccharomyces_cerevisiae_tRNA-Pro-TGG-2-1'
+ 38: 'Saccharomyces_cerevisiae_tRNA-Ser-AGA-1-1'
+ 39: 'Saccharomyces_cerevisiae_tRNA-Ser-AGA-2-1'
+ 40: 'Saccharomyces_cerevisiae_tRNA-Ser-CGA-1-1'
+ 41: 'Saccharomyces_cerevisiae_tRNA-Ser-GCT-1-1'
+ 42: 'Saccharomyces_cerevisiae_tRNA-Ser-TGA-1-1'
+ 43: 'Saccharomyces_cerevisiae_tRNA-Thr-AGT-1-1'
+ 44: 'Saccharomyces_cerevisiae_tRNA-Thr-CGT-1-1'
+ 45: 'Saccharomyces_cerevisiae_tRNA-Thr-TGT-1-1'
+ 46: 'Saccharomyces_cerevisiae_tRNA-Thr-TGT-2-1'
+ 47: 'Saccharomyces_cerevisiae_tRNA-Trp-CCA-1-1'
+ 48: 'Saccharomyces_cerevisiae_tRNA-Tyr-GTA-1-1'
+ 49: 'Saccharomyces_cerevisiae_tRNA-Und-NNN-1-1'
+ 50: 'Saccharomyces_cerevisiae_tRNA-Val-AAC-1-1'
+ 51: 'Saccharomyces_cerevisiae_tRNA-Val-AAC-2-1'
+ 52: 'Saccharomyces_cerevisiae_tRNA-Val-CAC-1-1'
+ 53: 'Saccharomyces_cerevisiae_tRNA-Val-TAC-1-1'
+ 54: 'Saccharomyces_cerevisiae_tRNA-iMet-CAT-1-1'
+ 55: 'Saccharomyces_cerevisiae_mito_AlaTCG_tRNAscan'
+ 56: 'Saccharomyces_cerevisiae_mito_ArgACG_modomics'
+ 57: 'Saccharomyces_cerevisiae_mito_ArgNCT_modomics_NCBI'
+ 58: 'Saccharomyces_cerevisiae_mito_AspGTC_tRNA_NCBI'
+ 59: 'Saccharomyces_cerevisiae_mito_AsnGTT_tRNAscan'
+ 60: 'Saccharomyces_cerevisiae_mito_CysGCA_tRNA_NCBI'
+ 61: 'Saccharomyces_cerevisiae_mito_GlnTTG_tRNA_NCBI'
+ 62: 'Saccharomyces_cerevisiae_mito_GluTTC_tRNA_NCBI'
+ 63: 'Saccharomyces_cerevisiae_mito_GlyTCC_modomics'
+ 64: 'Saccharomyces_cerevisiae_mito_HisGTG_modomics'
+ 65: 'Saccharomyces_cerevisiae_mito_tRNA_IleGAT_modomics'
+ 66: 'Saccharomyces_cerevisiae_mito_LeuTAA_modomics'
+ 67: 'Saccharomyces_cerevisiae_mito_LysTTT_modomics'
+ 68: 'Saccharomyces_cerevisiae_mito_imetCAT_modomics'
+ 69: 'Saccharomyces_cerevisiae_mito_MetCAT_modomics'
+ 70: 'Saccharomyces_cerevisiae_mito_PheGAA_modomics'
+ 71: 'Saccharomyces_cerevisiae_mito_ProTGG_tRNA_NCBI_modomics'
+ 72: 'Saccharomyces_cerevisiae_mito_SerGCT_modomics'
+ 73: 'Saccharomyces_cerevisiae_mito_SerTGA_modomics'
+ 74: 'Saccharomyces_cerevisiae_mito_ThrTAG_modomics'
+ 75: 'Saccharomyces_cerevisiae_mito_ThrTGT_tRNAscan'
+ 76: 'Saccharomyces_cerevisiae_mito_TrpTCA_modomics'
+ 77: 'Saccharomyces_cerevisiae_mito_TyrGTA_modomics'
+ 78: 'Saccharomyces_cerevisiae_mito_ValTAC_tRNAscan'
+ 48: 'Escherichia_coli_str_K-12_substr_MG1655_tRNA-Val-TAC-1-1'
+ 49: 'Escherichia_coli_str_K-12_substr_MG1655_tRNA-fMet-CAT-1-1'
+ 50: 'Escherichia_coli_str_K-12_substr_MG1655_tRNA-fMet-CAT-2-1'

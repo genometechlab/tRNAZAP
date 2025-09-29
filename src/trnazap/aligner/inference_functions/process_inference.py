@@ -1,6 +1,6 @@
 """Module for processing tRNA model inference output."""
-from splitter.storages.inference_results import InferenceResults
-from splitter import ModelConfig, ModelLoader, Inference, ResultsVisualizer, ZIRReader
+from trnazap import InferenceResults
+from trnazap import ZIRReader
 import torch
 import os
 import numpy as np
