@@ -52,6 +52,8 @@ Thumbs.db
 
 # Experimental folders
 **test**
+**inference_runs**
+**paper_plots**
 
 __pycache__/
 preliminary_test_data/
