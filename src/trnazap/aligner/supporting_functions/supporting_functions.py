@@ -10,8 +10,8 @@ import itertools
 
 import pysam
 
-from aligner.alignment_functions.alignment import align_read, shot_in_the_dark_alignment
-from aligner.progress_monitoring.progress import increment_counter
+from ...aligner.alignment_functions.alignment import align_read, shot_in_the_dark_alignment
+from ...aligner.progress_monitoring.progress import increment_counter
 
 from pathlib import Path
 

@@ -11,11 +11,10 @@ import argparse
 import sys
 from multiprocessing import Pool
 import time
-
 import numba
 numba.set_num_threads(1)
 
-from aligner.supporting_functions.supporting_functions import (
+from .aligner.supporting_functions.supporting_functions import (
     make_parameter_list,
     make_sub_bam,
     process_ref,
@@ -26,14 +25,14 @@ from aligner.supporting_functions.supporting_functions import (
     merge_bam
 )
 
-from aligner.progress_monitoring.progress import (
+from .aligner.progress_monitoring.progress import (
     create_shared_counter,
     increment_counter,
     create_monitor,
     get_counter_value
 )
 
-from aligner.inference_functions.process_inference import load_inference_obj
+from .aligner.inference_functions.process_inference import load_inference_obj
 
 program_name = "tRNA_zap"
 version = "05_16_25_v0.1.2"
