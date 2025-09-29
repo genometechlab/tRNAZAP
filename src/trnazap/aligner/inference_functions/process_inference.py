@@ -1,11 +1,8 @@
 """Module for processing tRNA model inference output."""
-from trnazap import InferenceResults
-from trnazap import ZIRReader
 import torch
 import os
 import numpy as np
 from tqdm import tqdm
-
 
 #TODO: Fix the logic for loading files
 
@@ -25,6 +22,8 @@ def load_inference_obj(inference_path):
         return from_files(inference_path)
 
 def from_files(inference_path_list):
+    from ...storages import InferenceResults
+    from ...io import ZIRReader
     inference_obj={}
     for pth in inference_path_list:
         print(f"Loading Single File: {pth}")
@@ -41,6 +40,8 @@ def from_files(inference_path_list):
     return inference_obj
 
 def from_dir(dir_path):
+    from ...storages import InferenceResults
+    from ...io import ZIRReader
     files = [f for f in os.listdir(dir_path) if f[-4:] == ".zir"]
     print(f"Loading inference files in: {dir_path}")
     inference_obj = {}
