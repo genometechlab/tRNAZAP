@@ -16,7 +16,7 @@ from .archive_format import (
 )
 
 if TYPE_CHECKING:
-    from ...storages import InferenceMetadata, ReadResult
+    from ..storages import InferenceMetadata, ReadResult
 
 logger = logging.getLogger(__name__)
 

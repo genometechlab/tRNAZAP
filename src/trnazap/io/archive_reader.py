@@ -11,10 +11,10 @@ from functools import partial
 from concurrent.futures import ThreadPoolExecutor
 
 from .archive_format import MAGIC_BYTES, FORMAT_VERSION, HEADER_SIZE, RECORD_MARKER, PREVIEW_MAX
-from ...utils import search_path
+from ..utils import search_path
 
 if TYPE_CHECKING:
-    from ...storages import InferenceMetadata, InferenceResults, ReadResult
+    from ..storages import InferenceMetadata, InferenceResults, ReadResult
 
 logger = logging.getLogger(__name__)
 PathLike = Union[str, Path, os.PathLike]
