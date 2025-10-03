@@ -11,10 +11,10 @@ from functools import partial
 from concurrent.futures import ThreadPoolExecutor
 
 from .archive_format import MAGIC_BYTES, FORMAT_VERSION, HEADER_SIZE, RECORD_MARKER, PREVIEW_MAX
-from ...utils import search_path
+from ..utils import search_path
 
 if TYPE_CHECKING:
-    from ...storages import InferenceMetadata, InferenceResults, ReadResult
+    from ..storages import InferenceMetadata, InferenceResults, ReadResult
 
 logger = logging.getLogger(__name__)
 PathLike = Union[str, Path, os.PathLike]
@@ -188,7 +188,7 @@ class ZIRReader:
             return
         index: Dict[str, Dict[str, Any]] = {}
 
-        def index_one(file_idx: int, path: Path, expected: int) -> None:  # type: ignore[no-redef]
+        def index_one(file_idx: int, path: Path, expected: int) -> Dict[str, Dict[str, Any]]:
             local: Dict[str, Dict[str, Any]] = {}
             with open(path, "rb", buffering=0) as raw:
                 f = io.BufferedReader(raw, buffer_size=1 << 20)
@@ -202,7 +202,7 @@ class ZIRReader:
                     if head[: len(RECORD_MARKER)] != RECORD_MARKER:
                         got = head[: len(RECORD_MARKER)].hex()
                         raise ValueError(f"Invalid record marker at {pos} in {path} (got 0x{got})")
-                    csize = self._S_U32.unpack_from(head, len(RECORD_MARKER))[0]
+                    csize, usize = struct.unpack_from("<II", head, len(RECORD_MARKER))
                     comp = f.read(csize)
                     if len(comp) < csize:
                         break
@@ -213,7 +213,7 @@ class ZIRReader:
                     end = 2 + rid_len
                     if len(prev) < end:
                         # fallback to full
-                        data = dcmp.decompress(comp)
+                        data = dcmp.decompress(comp, max_output_size=usize or 0)
                         rid_len = self._S_U16.unpack_from(data, 0)[0]
                         rid = data[2 : 2 + rid_len].decode("utf-8")
                     else:
@@ -221,11 +221,13 @@ class ZIRReader:
                     local[rid] = {"file_idx": file_idx, "offset": pos, "record_size": len(head) + csize}
             # merge
             index.update(local)
+            return local
 
         with ThreadPoolExecutor(max_workers=min(threads, max(1, len(self._paths)))) as ex:
             futs = [ex.submit(index_one, i, p, rc) for i, (p, rc) in enumerate(zip(self._paths, self.record_counts))]
             for fu in futs:
                 fu.result()
+                index.update(fu.result())
 
         self._index = index
 
@@ -244,7 +246,7 @@ class ZIRReader:
             raise EOFError("Unexpected EOF while reading record header")
         csize = self._S_U32.unpack_from(header, len(RECORD_MARKER))[0]
         comp = f.read(csize)
-        data = self.decompressors[info["file_idx"]].decompress(comp)
+        data = self.decompressors[info["file_idx"]].decompress(comp, max_output_size=self._S_U32.unpack_from(header, len(RECORD_MARKER)+4)[0])
         return self._parse_record(data)
 
     def get_path(self, read_id: str) -> Path:
@@ -296,7 +298,7 @@ class ZIRReader:
 
     # ---------------- Internal helpers ---------------- #
     def _decompress_full(self, file_idx: int, compressed: bytes, expected_uncompressed: int) -> bytes:
-        data = self.decompressors[file_idx].decompress(compressed)
+        data = self.decompressors[file_idx].decompress(compressed, max_output_size=expected_uncompressed)
         # Optional sanity: if expected size written by writer, verify
         if expected_uncompressed and len(data) != expected_uncompressed:
             logger.warning(
@@ -321,9 +323,7 @@ class ZIRReader:
         off += rid_len
 
         need(8, off)
-        num_chunks, chunk_size = self._S_I32.unpack_from(view, off), self._S_I32.unpack_from(view, off + 4)
-        num_chunks = num_chunks[0]
-        chunk_size = chunk_size[0]
+        num_chunks, chunk_size = struct.unpack_from("<ii", view, off)
         off += 8
 
         need(1, off)
@@ -363,16 +363,18 @@ class ZIRReader:
                 shape = struct.unpack_from(fmt, view, off)
                 off += 4 * ndim
                 total = int(np.prod(shape))
+                if total < 0 or total > 1_000_000_000:
+                    raise ValueError(f"Unreasonable array size ({total} elements)")
 
             bytes_needed = total * 4
             need(bytes_needed, off)
-            arr = np.frombuffer(view, dtype=np.float32, count=total, offset=off)
+            arr = np.frombuffer(view, dtype="<f4", count=total, offset=off)
             if ndim > 1:
                 arr = arr.reshape(shape)
             logits[key] = arr
             off += bytes_needed
 
-        from ...storages import ReadResult  # type: ignore
+        from ..storages import ReadResult  # type: ignore
         return ReadResult(read_id=rid, _logits=logits, num_chunks=num_chunks, chunk_size=chunk_size)
 
     def _read_header(self, f: io.BufferedReader) -> Tuple[Dict[str, Any], int]:

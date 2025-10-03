@@ -16,7 +16,7 @@ from .archive_format import (
 )
 
 if TYPE_CHECKING:
-    from ...storages import InferenceMetadata, ReadResult
+    from ..storages import InferenceMetadata, ReadResult
 
 logger = logging.getLogger(__name__)
 
@@ -76,7 +76,9 @@ class ZIRWriter:
         self.metadata = metadata
         self._file: Optional[io.BufferedWriter] = None
         self._buf = buffered_bytes
-        self._zstd = zstd.ZstdCompressor(level=compression_level, write_checksum=write_checksum)
+        self._zstd = zstd.ZstdCompressor(level=compression_level, 
+                                         write_checksum=write_checksum, 
+                                         write_content_size=True)
         self.record_count = 0
 
         # Cached struct packers
@@ -128,12 +130,7 @@ class ZIRWriter:
 
         payload = self._serialize_result(read_result)
 
-        # Compress using a streaming frame into an in-memory buffer to avoid double copies
-        # (zstd supports one-shot compress too; streaming here gives us checksum & future options)
-        cbuf = io.BytesIO()
-        with self._zstd.stream_writer(cbuf, closefd=False) as zw:
-            zw.write(payload)
-        compressed = cbuf.getvalue()
+        compressed = self._zstd.compress(payload)
 
         # Write record marker + sizes + frame
         f = self._file
@@ -227,8 +224,8 @@ class ZIRWriter:
 
             # Convert to float32 little-endian without unnecessary copies
             a = np.asarray(arr)
-            if a.dtype != np.float32:
-                a = a.astype(np.float32, copy=False)
+            if a.dtype != np.dtype('<f4'):
+                a = a.astype('<f4', copy=False)   # explicit little-endian float32
 
             ndim = int(a.ndim)
             if not (1 <= ndim <= 255):
