@@ -8,9 +8,10 @@ description = "A package for analyzing tRNA ionic current signal"
 version = "0.1.0"
 requires-python = ">=3.10"
 dependencies = [
-    "numba==0.61.2",
-    "numpy==2.2.6",
-    "pysam==0.22.0"]
+    "numba>=0.62.0",
+    "llvmlite>=0.45.0",
+    "numpy>=2.2.6",
+    "pysam>=0.22.0"]
 
 [tool.black]
 line-length = 88  # Slightly longer lines work well for scientific code
@@ -21,3 +22,6 @@ profile = "black"  # Makes isort compatible with black
 [flake8]
 max-line-length = 88
 extend-ignore = "E203"  # Black-compatible
+
+[project.scripts]
+trnazap = "trnazap.__main__:main"
