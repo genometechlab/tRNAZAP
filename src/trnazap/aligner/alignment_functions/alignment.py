@@ -79,54 +79,6 @@ def wagner_fisher_affine(s: str, t: str):
 
     return move_mat, d
 
-'''
-@njit(cache = True, fastmath = True)
-def wagner_fisher(s: str, t: str):
-    """Optimized Levenshtein distance calculation for tRNA.
-
-    This implementation is specialized for tRNA alignment
-    with modified scoring rules
-    that allow free end gaps in the reference sequence (t).
-    This accommodates partial
-    alignments where only a portion of the query may match
-    the reference.
-
-    Args:
-        s: Query sequence (the observed tRNA sequence based
-        on model prediction)
-        t: Reference sequence (the known tRNA template of
-        the predicted class)
-
-    Returns:
-        tuple: A tuple containing:
-            - float: The edit distance score
-            - ndarray: The complete dynamic programming
-            matrix
-    """
-    
-    m, n = len(s), len(t)
-    d = np.zeros(shape=(m + 1, n + 1), dtype=np.float32)
-
-    # Initialize first row with zeros to allow free start gaps in reference
-    # This means the query can start aligning at any position in the reference
-    d[0, :] = np.arange(n + 1, dtype=np.float32)
-
-    # Fill the matrix
-    for j in range(1, n + 1):
-        for i in range(1, m + 1):
-            if s[i - 1] == t[j - 1]:
-                substitution_cost = 0
-            else:
-                substitution_cost = 1
-
-            d[i, j] = min(
-                d[i - 1, j] + 1,  # deletion from query
-                d[i, j - 1] + 1,  # insertion into query
-                d[i - 1, j - 1] + substitution_cost,
-            )  # substitution/match
-
-    return d
-'''
 
 @njit(cache=True, fastmath=True)
 def calculate_vertical_traversal(move_mat):
@@ -177,46 +129,7 @@ def calculate_vertical_traversal(move_mat):
             path_x[path_idx] = m
             path_y[path_idx] = n
             path_idx += 1
-    
-        """
-        while n > 0:
-            # For each position, evaluate all three possible previous moves
-            # and choose the one that led to the current cell with minimum cost
-            del_score = (d[tmp_x - 1, m] == 1) * -1 if tmp_x >= 1 else np.inf
-            ins_score = (d[tmp_x, tmp_y - 1] == 2) * -1 if tmp_y >= 1 else np.inf
-            sub_score = (d[tmp_x - 1, tmp_y - 1] == 3) * -1 if tmp_x >= 1 and tmp_y >= 1 else np.inf
-            match_score = (d[tmp_x - 1, tmp_y - 1] == 0) * -1 if tmp_x >= 1 and tmp_y >= 1 else np.inf
-            
-            # Find minimum and corresponding move
-            if match_score <= sub_score and match_score <= del_score and match_score <= ins_score:
-                if tmp_x > 0 and tmp_y > 0 and trav_mat[tmp_x - 1, tmp_y - 1] != -1:
-                    start = trav_mat[tmp_x - 1, tmp_y - 1]
-                    break
-                tmp_x -= 1
-                tmp_y -= 1
-                
-            if sub_score <= del_score and sub_score <= ins_score:
-                if tmp_x > 0 and tmp_y > 0 and trav_mat[tmp_x - 1, tmp_y - 1] != -1:
-                    start = trav_mat[tmp_x - 1, tmp_y - 1]
-                    break
-                tmp_x -= 1
-                tmp_y -= 1
-            elif ins_score <= del_score:
-                if tmp_y > 0 and trav_mat[tmp_x, tmp_y - 1] != -1:
-                    start = trav_mat[tmp_x, tmp_y - 1]
-                    break
-                tmp_y -= 1
-            else:
-                if tmp_x > 0 and trav_mat[tmp_x - 1, tmp_y] != -1:
-                    start = trav_mat[tmp_x - 1, tmp_y]
-                    break
-                tmp_x -= 1
-            
-            start = tmp_x
-            path_x[path_idx] = tmp_x
-            path_y[path_idx] = tmp_y
-            path_idx += 1
-        """
+
         # Update trav_mat for all positions in path
         for i in range(path_idx):
             trav_mat[path_x[i], path_y[i]] = start
@@ -298,40 +211,6 @@ def compute_edit_operations_affine(s: str, t: str):
             m -= 1
 
         idx -= 1
-        '''
-        # For each position, evaluate all three possible previous moves
-        # and choose the one that led to the current cell with minimum cost
-        deletion_score = (d[m - 1, n] == 1) * -1 if m >= 1 else np.inf
-        insertion_score = (d[m , n - 1] == 2) * -1 if n >= 1 else np.inf
-        sub_score = (d[m - 1, n - 1] == 3) * -1 if m >= 1 and n >= 1 else np.inf
-        match_score = (d[m - 1, n - 1] == 0) * -1 if m >= 1 and n >= 1 else np.inf
-
-        # Diagonal move: check if it's a match or substitution
-        if (match_score <= sub_score and
-            match_score <= insertion_score and
-            match_score <= deletion_score):
-            instr_array[idx] = ord("m")  # Match (identical bases)
-            m -= 1
-            n -= 1
-        elif (sub_score <= insertion_score and
-              sub_score <= deletion_score):
-            instr_array[idx] = ord("s") 
-            m -= 1
-            n -= 1
-        # Horizontal move: corresponds to deletion in reference frame
-        elif insertion_score <= deletion_score:
-            # Note: "deletion" here is relative to transforming query → reference
-            # In alignment terms, this is an insertion into the query
-            instr_array[idx] = ord("d")  # Deletion
-            n -= 1
-        # Vertical move: corresponds to insertion in reference frame
-        else:
-            # In alignment terms, this is a deletion from the query
-            instr_array[idx] = ord("i")  # Insertion
-            m -= 1
-
-        idx -= 1
-        '''
 
     return instr_array[idx + 1 :], start, stop   
         
@@ -1235,7 +1114,7 @@ def align_read(
     # Flag 256 in SAM specification indicates "secondary alignment"
     # This is used when a read could align equally well to multiple references
     if secondary:
-        a.mapping_quality = 0  # Keep high quality even for secondary alignments
+        a.mapping_quality = 0  
         a.flag = 256           # Set the secondary alignment bit flag
     
     # Convert our alignment operations into standard CIGAR format
