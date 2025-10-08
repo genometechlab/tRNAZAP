@@ -68,7 +68,7 @@ class ZIRReader:
             p = Path(p)
             if p.is_dir():
                 try:
-                    from ...utils import search_path  # type: ignore
+                    from ..utils import search_path  # type: ignore
                     found = search_path(p, recursive=True, patterns=["*.zir"])  # returns Iterable[Path]
                 except Exception:
                     found = _default_search_path(p, recursive=True, patterns=["*.zir"])  # fallback
@@ -270,11 +270,11 @@ class ZIRReader:
 
     @property
     def metadata(self) -> "InferenceMetadata":
-        from ...storages import InferenceMetadata  # type: ignore
+        from ..storages import InferenceMetadata  # type: ignore
         return InferenceMetadata(**self.metadata_dict.copy())
 
     def to_inference_results(self) -> "InferenceResults":
-        from ...storages import InferenceResults, InferenceMetadata  # type: ignore
+        from ..storages import InferenceResults, InferenceMetadata  # type: ignore
         meta = self.metadata_dict.copy()
         if meta.get("pod5_paths"):
             meta["pod5_paths"] = set(meta["pod5_paths"])  # restore set if writer serialized it
