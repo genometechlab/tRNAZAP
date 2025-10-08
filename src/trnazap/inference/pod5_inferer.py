@@ -14,7 +14,7 @@ import pod5
 import torch
 from tqdm.auto import tqdm
 
-from .infenrece_base import InferenceBase
+from .inference_base import InferenceBase
 from ..config.model_config import ModelConfig, ModelLoader
 from ..feeders import SequenceStandardizer, load_signal, collate_fn
 from ..storages import InferenceResults, InferenceMetadata, ReadResult
@@ -39,9 +39,12 @@ class Inference(InferenceBase):
         device: Optional[torch.device] = None,
     ) -> None:
         self.config: ModelConfig = self._load_config(config)
-        self.device: torch.device = (
-            device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        )
+        if isinstance(device, str):
+            self.device = torch.device(device)
+        elif isinstance(device, torch.device):
+            self.device = device
+        else:
+            self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         self.queue_size_mult = 4
         
@@ -88,6 +91,9 @@ class Inference(InferenceBase):
         # Both - useful for moderate datasets
         results = inference.predict("data.pod5", output_path="output.zir")
         """
+        if not return_results and output_path is None:
+            raise ValueError("Nothing to do: set output_path or return_results=True")
+                     
         start = time.time()
         pod5_pathset: PathSet = self._resolve_paths(pod5_paths)
         
@@ -244,7 +250,7 @@ class Inference(InferenceBase):
     def _producer_worker(
         self,
         *,
-        pod5_paths: Path,
+        pod5_paths: Union[PathLike, PathLikeList],
         sample_queue: "queue.Queue[Optional[Dict]]",
         read_ids: Optional[List[str]],
         progress_bar: Optional[tqdm.tqdm]
@@ -345,10 +351,10 @@ class Inference(InferenceBase):
         batch_t = collate_fn(batch)
 
         inputs = {k: v.to(self.device) for k, v in batch_t["inputs"].items()}
-        use_amp = self.config.float_dtype == "float16" and self.device != "cpu"
-
+        use_amp = (self.config.float_dtype in {"float16", "fp16"}) and (self.device.type != "cpu")
+        dtype = torch.float16 if self.config.float_dtype in {"float16", "fp16"} else None
         with torch.no_grad(), torch.amp.autocast(
-            device_type=self.device, enabled=use_amp
+            device_type=self.device.type, enabled=use_amp, dtype=dtype
         ):
             outputs = self.model(**inputs)
 
