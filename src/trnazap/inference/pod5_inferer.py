@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 import numpy as np
 import pod5
 import torch
-import tqdm
+from tqdm.auto import tqdm
 
 from .infenrece_base import InferenceBase
 from ..config.model_config import ModelConfig, ModelLoader
@@ -90,11 +90,12 @@ class Inference(InferenceBase):
         """
         start = time.time()
         pod5_pathset: PathSet = self._resolve_paths(pod5_paths)
+        
+        num_reads = self._get_num_reads(read_ids, pod5_pathset)
 
         metadata = self._build_metadata(pod5_pathset, batch_size)
         
         # Setup storage strategy
-            
         in_memory_results = None
         zir_manager = None
         
@@ -106,6 +107,25 @@ class Inference(InferenceBase):
                 base_path=Path(output_path),
                 metadata=metadata,
                 shard_size=shard_size,
+            )
+            
+        
+        producer_pbar = None
+        consumer_pbar = None
+        if show_progress:
+            producer_pbar = tqdm(
+                desc="Reading POD5",
+                unit="reads",
+                total=num_reads,
+                leave=True,
+                position=0
+            )
+            consumer_pbar = tqdm(
+                desc="Processed reads",
+                unit="reads",
+                total=num_reads,
+                leave=True,
+                position=1
             )
 
         # Queue for preprocessed samples
@@ -120,7 +140,7 @@ class Inference(InferenceBase):
                 pod5_paths=pod5_pathset.paths,
                 read_ids=read_ids,
                 sample_queue=sample_queue,
-                show_progress=show_progress,
+                progress_bar=producer_pbar
             ),
             daemon=True,
             name="pod5-producer",
@@ -133,6 +153,7 @@ class Inference(InferenceBase):
             in_memory_results=in_memory_results,
             zir_manager=zir_manager,
             batch_size=batch_size,
+            progress_bar=consumer_pbar
         )
 
         producer.join()
@@ -159,7 +180,6 @@ class Inference(InferenceBase):
         pod5_paths: Union[PathLike, PathLikeList],
         read_ids: Optional[List[str]] = None,
         batch_size: int = 32,
-        show_progress: bool = True,
     ) -> Iterator[ReadResult]:
         """
         Iterator version for streaming results without storing in memory.
@@ -193,7 +213,7 @@ class Inference(InferenceBase):
                 pod5_paths=pod5_pathset.paths,
                 read_ids=read_ids,
                 sample_queue=sample_queue,
-                show_progress=show_progress,
+                progress_bar=None,
             ),
             daemon=True,
         )
@@ -227,7 +247,7 @@ class Inference(InferenceBase):
         pod5_paths: Path,
         sample_queue: "queue.Queue[Optional[Dict]]",
         read_ids: Optional[List[str]],
-        show_progress: bool,
+        progress_bar: Optional[tqdm.tqdm]
     ) -> None:
         """CPU thread: stream reads → standardise → chunk → queue."""
         try:
@@ -239,22 +259,18 @@ class Inference(InferenceBase):
                     if read_ids
                     else reader.reads()
                 )
-                
-                if show_progress:
-                    reads_iter = tqdm.tqdm(
-                        reads_iter,
-                        desc="Reading POD5",
-                        total=len(read_ids) if read_ids else None,
-                        leave=True,
-                    )
 
                 for rec in reads_iter:
                     try:
                         sample_queue.put(self._process_record(rec), block=True)
+                        if progress_bar:
+                            progress_bar.update(1)
                     except Exception as exc:
                         logger.warning("Failed on read %s: %s", rec.read_id, exc)
         finally:
             sample_queue.put(None)
+            if progress_bar:
+                progress_bar.close()
 
     def _consumer_loop(
         self,
@@ -263,6 +279,7 @@ class Inference(InferenceBase):
         in_memory_results: Optional[InferenceResults],
         zir_manager: Optional['ZIRShardManager'],
         batch_size: int,
+        progress_bar: Optional[tqdm.tqdm]
     ) -> int:
         """Main thread: pop samples, build batches, run GPU, store results."""
         current_batch: List[Dict] = []
@@ -285,10 +302,15 @@ class Inference(InferenceBase):
                             in_memory_results.add_read_result(result)
                         if zir_manager:
                             zir_manager.add_result(result)
+                        if progress_bar:
+                            progress_bar.update(1)
                         processed_count += 1
                     
                     current_batch = []
         
+        if progress_bar:
+            progress_bar.close()
+            
         return processed_count
 
     def _consumer_iter_worker(
@@ -347,3 +369,18 @@ class Inference(InferenceBase):
             results.append(result)
         
         return results
+    
+    def _get_num_reads(
+        self,
+        read_ids: Optional[List[str]],
+        pod5_pathset: PathSet
+    ) -> Optional[int]:
+        if read_ids:
+            return len(read_ids)
+        try:
+            with pod5.DatasetReader(
+                paths=pod5_pathset.paths, recursive=True
+            ) as reader:
+                return len(reader)
+        except Exception as e:
+            return None
