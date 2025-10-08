@@ -14,7 +14,7 @@ import pod5
 import torch
 import tqdm
 
-from .infenrece_base import InferenceBase
+from .inference_base import InferenceBase
 from ..config.model_config import ModelConfig, ModelLoader
 from ..feeders import SequenceStandardizer, load_signal, collate_fn
 from ..storages import InferenceResults, InferenceMetadata, ReadResult
