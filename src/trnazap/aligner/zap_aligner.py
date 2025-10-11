@@ -1,3 +1,18 @@
+import os
+os.environ['KMP_WARNINGS'] = '0'
+os.environ['OMP_NUM_THREADS'] = '1'
+
+import argparse
+import sys
+from multiprocessing import Pool
+import time
+import numba
+numba.set_num_threads(1)
+
+from .supporting_functions.supporting_functions import get_model_to_ref, process_ref, make_parameter_list, make_sort_params_list, split_read_ids, make_sub_bam, sort_bam, merge_bam
+from .inference_functions.process_inference import load_inference_obj
+from .progress_monitoring.progress import create_shared_counter, create_monitor, get_counter_value, increment_counter
+
 def run_align(
     unaligned_bam, inference_list, out_dir, out_pre, threads, model, secondary
 ):
@@ -29,6 +44,9 @@ def run_align(
         loads the reference, processes inference data, and distributes read alignment
         work in parallel across the specified number of threads.
     """
+
+    program_name = "tRNA_zap"
+    version = "05_16_25_v0.1.2"
     # Identifying the appropriate reference based on the model selected
     model_to_ref = get_model_to_ref()
 

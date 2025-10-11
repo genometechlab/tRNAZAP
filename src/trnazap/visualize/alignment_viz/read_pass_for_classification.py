@@ -171,6 +171,7 @@ def multiprocess_trna_data(args):
                 continue
             if read.is_unmapped:
                 read_dict[read.query_name]['zap'] = 'Unmapped'
+                read_dict[read.query_name]['zap_to_bwa'] = 'Unmapped'
                 continue
             if read.is_secondary or read.is_supplementary:
                 continue
@@ -182,6 +183,7 @@ def multiprocess_trna_data(args):
                                          )
             if track_arr[0] is None:
                 read_dict[read.query_name]['zap'] = 'No tRNA'
+                read_dict[read.query_name]['zap_to_bwa'] = 'Unmapped'
                 continue
                 
             ident, p = read_pass(track_arr, include_insertions=True, min_coverage = 15)
@@ -199,6 +201,7 @@ def multiprocess_trna_data(args):
                 read_dict[read.query_name]['zap_to_bwa'] = zap_to_bwa[read.reference_name]
             else:
                 read_dict[read.query_name]['zap'] = 'Failed'
+                read_dict[read.query_name]['zap_to_bwa'] = 'Failed'
 
     return ref_set, read_dict, bwa_ident_array, bwa_tRNA_dict, zap_ident_array, zap_tRNA_dict, read_ident_dict, exclusion_id_set
 
@@ -265,4 +268,4 @@ def increment_array(template_arr, new_arr):
     return template_arr
 
 def trna_factory():
-    return {'zap':'Unmapped', 'bwa':'Unmapped'}
+    return {'zap':'Unmapped', 'zap_to_bwa':'Unmapped', 'bwa':'Unmapped'}

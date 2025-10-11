@@ -17,7 +17,7 @@ def register_subparser(subparsers):
                         "-m",
                         required=True,
                         type=str,
-                        choices = ["ecoli", "yeast"]
+                        choices = ["e_coli", "yeast"]
                        )
 
     parser.add_argument("--out_dir",
@@ -56,16 +56,15 @@ def run_alignment_visualize(args):
     refs = files('trnazap').joinpath('references')
     if args.model == 'e_coli':
         bwa_ref = str(refs / 'bwa_align_references' / 'eschColi_K_12_MG1655-mature-tRNAs_bwa_subset.biosplints.fa')
-        zap_ref = str(refs / 'zap_align_references' / 'eschColi_K_12_MG1655-mature-tRNAs.fa')
+        zap_ref = str(refs / 'zap_align_references' / 'eschColi_K_12_MG1655-mature-tRNAs_zap_ref.fa')
 
     if args.model == 'yeast':
         bwa_ref = str(refs / 'bwa_align_references' / 'sacCer3-mature-tRNAs_bwa_subset_biosplints.fa')
-        zap_ref = str(refs / 'zap_align_references' / 'sacCer3-mature-tRNAs.fa')
+        zap_ref = str(refs / 'zap_align_references' / 'sacCer3-mature-tRNAs_zap_ref.fa')
     
     create_figures(
         bwa_ref=bwa_ref,
         zap_ref=zap_ref,
-        model=args.model,
         bwa_bam=args.bwa_path,
         zap_bam=args.zap_path,
         threads=args.threads,

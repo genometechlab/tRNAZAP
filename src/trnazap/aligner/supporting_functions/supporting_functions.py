@@ -7,7 +7,7 @@ import os
 import pickle
 import subprocess
 import itertools
-
+from importlib.resources import files
 import pysam
 
 from ...aligner.alignment_functions.alignment import align_read, shot_in_the_dark_alignment
@@ -26,10 +26,10 @@ def get_model_to_ref():
     return: Dictionary looking up reference from the model name
     """
 
+    ref_path = files('trnazap').joinpath('references')
     return {
-        "human-mt": Path(__file__).parent.parent / 'references' / 'hg38-mature-tRNAs.fa',
-        "yeast": Path(__file__).parent.parent / 'references' / 'sacCer3-mature-tRNAs.fa',
-        "e_coli": Path(__file__).parent.parent / 'references' / 'eschColi_K_12_MG1655-mature-tRNAs.fa',
+        "yeast": ref_path / "zap_align_references" / "sacCer3-mature-tRNAs_zap_ref.fa",
+        "e_coli": ref_path / "zap_align_references" / "eschColi_K_12_MG1655-mature-tRNAs_zap_ref.fa",
     }
 
 

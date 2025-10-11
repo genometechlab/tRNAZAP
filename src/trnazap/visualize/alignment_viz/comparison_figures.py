@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 import os
 import multiprocessing
 from matplotlib.colors import LogNorm
+import pickle
 
 plt.rcParams['pdf.fonttype'] = 42
 plt.switch_backend('agg')
@@ -155,7 +156,8 @@ def conversion_dicts(bwa_ref, zap_ref):
 
     for seq in pysam.FastxFile(bwa_ref):
         bwa_mem_ref_dict[seq.name] = seq.sequence
-        zap_ref_dict[seq.name] = seq.sequence[36:-42]
+    for seq in pysam.FastxFile(zap_ref):
+        zap_ref_dict[seq.name] = seq.sequence#[36:-42]
     ref_convert = ref_conversion(bwa_ref,
                                  zap_ref)
 
@@ -166,6 +168,8 @@ def conversion_dicts(bwa_ref, zap_ref):
     for key in zap_ref_dict:
         zap_ref_lens[key] = len(zap_ref_dict[key])
 
+    for key, value in zap_ref_dict.items():
+        print(f"{key} : {value}")
     return (ref_convert,
             bwa_mem_ref_dict,
             zap_ref_dict,
@@ -178,6 +182,7 @@ def alignment_counts(total_read_dict):
     zap_alignments = {}
 
     for key in total_read_dict:
+        assert 'zap_to_bwa' in total_read_dict[key], f"{total_read_dict[key]}" 
         zap = total_read_dict[key]['zap_to_bwa']
         if zap not in zap_alignments:
             zap_alignments[zap] = 0
@@ -334,8 +339,7 @@ def make_id_sets(total_read_dict):
         elif zap != 'Unmapped' and zap != 'No tRNA' and zap != 'Failed':
             zap_no_bwa.add(read_id)
 
-    return id_set, mismatch_id_set, bwa_no_zap, zap_no_bwa
-
+    return id_set, mismatch_id_set, bwa_no_zap, zap_no_bwa    
 
 def create_figures(
         bwa_ref,
@@ -355,7 +359,7 @@ def create_figures(
         one_aligner_ident=True,
         classification_heatmap=True
 ):
-
+    print(zap_ref)
     ref_convert, bwa_mem_ref_dict, zap_ref_dict, bwa_ref_lens, zap_ref_lens = conversion_dicts(bwa_ref, zap_ref)
 
     # Calculate and unpack all the relevant datatypes
@@ -384,6 +388,9 @@ def create_figures(
                           for value in values
                       ])
 
+    with open("total_read_dict.pkl", "wb") as outfile:
+        pickle.dump(total_read_dict, outfile)
+
     if per_class_identity:
         per_class_identity_plot(df, out_pre, out_dir)
 
@@ -410,10 +417,11 @@ def create_figures(
 
     if alignment_heatmap:
         plot_alignment_heatmap(count_matrix,
-                               out_dir,
-                               out_pre)
+                               out_pre,
+                               out_dir)
 
     id_set, mismatch_id_set, bwa_no_zap, zap_no_bwa = make_id_sets(total_read_dict)
+
     if per_read_ident:
         per_read_df = calculate_per_read_ident(read_ident_dict, id_set)
         plot_per_read_ident(per_read_df, out_pre, out_dir)
