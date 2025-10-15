@@ -197,14 +197,19 @@ def secondary_better(primary_read, secondary_read, min_ident_improvement):
         return True
         
     primary_ref_len = primary_read.reference_end - primary_read.reference_start
-    primary_identity = (primary_ref_len - primary_read.get_tag('ED')) / primary_ref_len
+    primary_identity = (primary_ref_len) / (primary_ref_len + primary_read.get_tag('ED'))
+    primary_matches = primary_read.get_cigar_stats()[0][7]
 
     secondary_ref_len = secondary_read.reference_end - secondary_read.reference_start
-    secondary_identity = (secondary_ref_len - secondary_read.get_tag('ED')) / secondary_ref_len
+    secondary_identity = (secondary_ref_len) / (secondary_ref_len + secondary_read.get_tag('ED'))
+    secondary_matches = secondary_read.get_cigar_stats()[0][7]
+
+    if secondary_matches >= 15 and primary_matches < 15:
+        return True
 
     return (secondary_identity - min_ident_improvement) > primary_identity
 
-# Comments written with assistance from Anthropic Claudi Sonnet v4.0
+# Comments written with assistance from Anthropic Claude Sonnet v4.0
 def make_sub_bam(args_list):
     """
     Create a subset BAM file with aligned tRNA reads based on inference predictions.
@@ -331,14 +336,15 @@ def make_sub_bam(args_list):
                         ref_dict[secondary_ref]['reference_index'],
                         ref_dict[secondary_ref]['reference_seq'],
                         secondary = True)
-    
+
                 if allow_secondary and secondary_better(aligned_read, secondary_read, min_ident_improvement = 0.001):
                     aligned_read, secondary_read = secondary_read, aligned_read
                     aligned_read.flag = 0
                     aligned_read.mapping_quality = 60
-                    aligned_read.set_tag('ws', 1) #what does ws stand for? Was Second
-                    secondary_read.flag = 256
-                    secondary_read.mapping_quality = 0
+                    aligned_read.set_tag('ws', 1)
+                    if not secondary_read.is_unmapped:     
+                        secondary_read.flag = 256
+                        secondary_read.mapping_quality = 0
 
             reads_processed += 1
             if reads_processed % 5000 == 0:

@@ -7,12 +7,15 @@ sns.set_theme(style='white')
 from matplotlib.colors import LogNorm
 import numpy as np
 from numba import njit
+from importlib.resources import files
+import pickle
 
 def ref_conversion(bwa_ref, zap_ref):
-    
     zap_seq_lookup = {}
     for seq in pysam.FastxFile(zap_ref):
         zap_seq_lookup[seq.sequence] = seq.name
+
+
         
     ref_conversion_dict = {}
     for seq in pysam.FastxFile(bwa_ref):
@@ -76,21 +79,13 @@ def positional_array(read, ref_seq, region_start, region_end):
 @njit()
 def read_pass(track_arr, include_insertions = False, ident_threshold = 0.6, min_coverage = 10):
 
-    #print(f"READ PASS!\n\n")
     total = np.count_nonzero(~np.isnan(track_arr[0]))
-    #print(f"total1 = {total=}")
     if include_insertions:
         total += np.nansum(track_arr[1])
-        #print(f"total2 = {total=}")
     matches = np.nansum(track_arr[0])
-    #print(f"matches1 = {matches=}")
     
     ident = matches / total
-    #print(f"{ident=}")
 
-    #print(f"{ident >= ident_threshold=}")
-    #print(f"{(np.nansum(track_arr[2]) >= min_coverage)=}")
-    #print(f"{(ident >= ident_threshold) & (np.nansum(track_arr[2]) >= min_coverage)=}")
     return ident, (ident >= ident_threshold) & (np.nansum(track_arr[2]) >= min_coverage)
 
 def hash_first_hex(read_id):
@@ -100,7 +95,9 @@ def hash_first_hex(read_id):
         return hash(read_id) & 0xFFFFFFFF
 
 def multiprocess_trna_data(args):
-    
+    viz_path = files('trnazap').joinpath('visualize')
+    with open(str(viz_path / 'alignment_viz' / 'align_to_viz_labels.pkl'), 'rb') as infile:
+        ref_label_dict = pickle.load(infile)
     bwamem, zap, bwa_mem_ref_dict, bwa_ref_lens, zap_ref_dict, zap_ref_lens, threads, thread_idx = args
     ref_set = {'Unmapped'}
     threads=int(threads)
@@ -130,20 +127,20 @@ def multiprocess_trna_data(args):
                 continue
             if read.has_tag('pi'):
                 continue
+            if read.is_secondary or read.is_supplementary:
+                continue
             if read.is_unmapped:
                 read_dict[read.query_name]['bwa'] = 'Unmapped'
                 continue
             if read.mapping_quality <= 0:
                 exclusion_id_set.add(read.query_name)
                 continue
-            if read.is_secondary or read.is_supplementary:
-                continue
 
-            ref_set.add(read.reference_name)
+            ref_set.add(ref_label_dict[read.reference_name])
             track_arr = positional_array(read, 
-                                         bwa_mem_ref_dict[read.reference_name], 
+                                         bwa_mem_ref_dict[ref_label_dict[read.reference_name]], 
                                          36, 
-                                         bwa_ref_lens[read.reference_name] - 43)
+                                         bwa_ref_lens[ref_label_dict[read.reference_name]] - 43)
             if track_arr[0] is None:
                 read_dict[read.query_name]['bwa'] = 'No tRNA'
                 continue
@@ -152,11 +149,11 @@ def multiprocess_trna_data(args):
             read_ident_dict[read.query_name] = {'bwa':ident, 'zap':None}
             
             if p:
-                bwa_ident_array[read.reference_name].append(ident)
-                if read.reference_name not in bwa_tRNA_dict:
-                    bwa_tRNA_dict[read.reference_name] = np.full((3, track_arr.shape[1]), 0)
-                bwa_tRNA_dict[read.reference_name] = increment_array(bwa_tRNA_dict[read.reference_name], track_arr)
-                read_dict[read.query_name]['bwa']=read.reference_name
+                bwa_ident_array[ref_label_dict[read.reference_name]].append(ident)
+                if ref_label_dict[read.reference_name] not in bwa_tRNA_dict:
+                    bwa_tRNA_dict[ref_label_dict[read.reference_name]] = np.full((3, track_arr.shape[1]), 0)
+                bwa_tRNA_dict[ref_label_dict[read.reference_name]] = increment_array(bwa_tRNA_dict[ref_label_dict[read.reference_name]], track_arr)
+                read_dict[read.query_name]['bwa']=ref_label_dict[read.reference_name]
             else:
                 read_dict[read.query_name]['bwa'] = 'Failed'
     
@@ -169,17 +166,17 @@ def multiprocess_trna_data(args):
                 continue
             if read.query_name in exclusion_id_set:
                 continue
+            if read.is_secondary or read.is_supplementary:
+                continue
             if read.is_unmapped:
                 read_dict[read.query_name]['zap'] = 'Unmapped'
                 read_dict[read.query_name]['zap_to_bwa'] = 'Unmapped'
                 continue
-            if read.is_secondary or read.is_supplementary:
-                continue
-            ref_set.add(read.reference_name)
+            ref_set.add(ref_label_dict[read.reference_name])
             track_arr = positional_array(read, 
-                                         zap_ref_dict[read.reference_name], 
+                                         zap_ref_dict[ref_label_dict[read.reference_name]], 
                                          0, 
-                                         zap_ref_lens[read.reference_name]-1
+                                         zap_ref_lens[ref_label_dict[read.reference_name]]-1
                                          )
             if track_arr[0] is None:
                 read_dict[read.query_name]['zap'] = 'No tRNA'
@@ -193,12 +190,12 @@ def multiprocess_trna_data(args):
             else:
                 read_ident_dict[read.query_name]['zap'] = ident
             if p:
-                zap_ident_array[read.reference_name].append(ident)
-                if read.reference_name not in zap_tRNA_dict:
-                    zap_tRNA_dict[read.reference_name] = np.full((3, track_arr.shape[1]), 0)
-                zap_tRNA_dict[read.reference_name] = increment_array(zap_tRNA_dict[read.reference_name], track_arr)
-                read_dict[read.query_name]['zap'] = read.reference_name
-                read_dict[read.query_name]['zap_to_bwa'] = zap_to_bwa[read.reference_name]
+                zap_ident_array[ref_label_dict[read.reference_name]].append(ident)
+                if ref_label_dict[read.reference_name] not in zap_tRNA_dict:
+                    zap_tRNA_dict[ref_label_dict[read.reference_name]] = np.full((3, track_arr.shape[1]), 0)
+                zap_tRNA_dict[ref_label_dict[read.reference_name]] = increment_array(zap_tRNA_dict[ref_label_dict[read.reference_name]], track_arr)
+                read_dict[read.query_name]['zap'] = ref_label_dict[read.reference_name]
+                read_dict[read.query_name]['zap_to_bwa'] = zap_to_bwa[ref_label_dict[read.reference_name]]
             else:
                 read_dict[read.query_name]['zap'] = 'Failed'
                 read_dict[read.query_name]['zap_to_bwa'] = 'Failed'

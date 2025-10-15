@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 import os
 import multiprocessing
 from matplotlib.colors import LogNorm
+from importlib.resources import files
 import pickle
 
 plt.rcParams['pdf.fonttype'] = 42
@@ -151,13 +152,18 @@ def per_read_output(bwamem,
 
 def conversion_dicts(bwa_ref, zap_ref):
 
+    viz_path = files('trnazap').joinpath('visualize')
+    with open(str(viz_path / 'alignment_viz' / 'align_to_viz_labels.pkl'), 'rb') as infile:
+        ref_label_dict = pickle.load(infile)
+    
     bwa_mem_ref_dict = {}
     zap_ref_dict = {}
 
     for seq in pysam.FastxFile(bwa_ref):
-        bwa_mem_ref_dict[seq.name] = seq.sequence
+        bwa_mem_ref_dict[ref_label_dict[seq.name]] = seq.sequence
     for seq in pysam.FastxFile(zap_ref):
-        zap_ref_dict[seq.name] = seq.sequence#[36:-42]
+        zap_ref_dict[ref_label_dict[seq.name]] = seq.sequence
+
     ref_convert = ref_conversion(bwa_ref,
                                  zap_ref)
 
@@ -168,8 +174,6 @@ def conversion_dicts(bwa_ref, zap_ref):
     for key in zap_ref_dict:
         zap_ref_lens[key] = len(zap_ref_dict[key])
 
-    for key, value in zap_ref_dict.items():
-        print(f"{key} : {value}")
     return (ref_convert,
             bwa_mem_ref_dict,
             zap_ref_dict,
@@ -208,10 +212,10 @@ def alignment_counts(total_read_dict):
             zap_fail += 1
 
     count_df = pd.DataFrame([
-                                {'trna': key.split("_")[-1][5:], 'count': value, 'aligner': 'bwa'}
+                                {'trna': key, 'count': value, 'aligner': 'bwa'}
                                 for key, value in bwa_alignments.items()]
                             + [
-                                {'trna': key.split("_")[-1][5:], 'count': value, 'aligner': 'zap'}
+                                {'trna': key, 'count': value, 'aligner': 'zap'}
                                 for key, value in zap_alignments.items()])
 
     count_df.loc[count_df["trna"] == "ped", "trna"] = "Unmapped"
@@ -247,7 +251,23 @@ def count_deltas(count_df):
         delta_label.append(t)
     return deltas, delta_label
 
-
+'''
+def sort_with_unmapped_last(df, column='trna'):
+    """Sort dataframe with 'Unmapped', 'Failed', etc. at the end"""
+    special_categories = ['Unmapped', 'Failed', 'No tRNA']
+    
+    # Create a sort key: special categories get high values, others get 0
+    def sort_key(x):
+        if x in special_categories:
+            return (1, special_categories.index(x))  # (1, position) sorts after (0, anything)
+        return (0, x)  # Normal sorting for non-special categories
+    
+    df['_sort_key'] = df[column].map(lambda x: sort_key(x))
+    df_sorted = df.sort_values('_sort_key')
+    df_sorted = df_sorted.drop('_sort_key', axis=1)
+    
+    return df_sorted
+'''
 def make_count_matrix(total_read_dict):
     classification_df = pd.DataFrame.from_dict(total_read_dict, orient="index")
     classification_df = classification_df.replace("Failed", "Unmapped")
@@ -359,7 +379,6 @@ def create_figures(
         one_aligner_ident=True,
         classification_heatmap=True
 ):
-    print(zap_ref)
     ref_convert, bwa_mem_ref_dict, zap_ref_dict, bwa_ref_lens, zap_ref_lens = conversion_dicts(bwa_ref, zap_ref)
 
     # Calculate and unpack all the relevant datatypes
@@ -379,11 +398,11 @@ def create_figures(
                                               threads)
 
     df = pd.DataFrame([
-                          {'trna': key.split("_")[-1][5:], 'ident': value, 'aligner': 'bwa'}
+                          {'trna': key, 'ident': value, 'aligner': 'bwa'}
                           for key, values in bwa_ident_dict.items()
                           for value in values
                       ] + [
-                          {'trna': key.split("_")[-1][5:], 'ident': value, 'aligner': 'zap'}
+                          {'trna': key, 'ident': value, 'aligner': 'zap'}
                           for key, values in zap_ident_dict.items()
                           for value in values
                       ])

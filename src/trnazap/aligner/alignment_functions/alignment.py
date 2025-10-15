@@ -536,6 +536,7 @@ def smith_waterman_for_fragment(tRNA, fragment):
     gap_extend = -1     # Penalty for extending an existing gap (lower)
     match_score = +3    # Reward for matching bases
     mismatch_score = -1 # Penalty for mismatched bases
+    min_matches = 15 #Only consider scores for regions with 15 matches
     
     # Get sequence lengths
     tRNA_len = len(tRNA)
@@ -565,14 +566,14 @@ def smith_waterman_for_fragment(tRNA, fragment):
             
             # Option 2: Deletion (horizontal move - gap in tRNA)
             # Check if the cell we're coming from was reached by a deletion
-            if traceback_mat[i][j-1] == 2:  # Already in a deletion
+            if traceback_mat[i][j-1] == 1:  # Already in a deletion
                 deletion_score = score_mat[i][j-1] + gap_extend
             else:  # Opening a new deletion
                 deletion_score = score_mat[i][j-1] + gap_open
             
             # Option 3: Insertion (vertical move - gap in fragment)
             # Check if the cell we're coming from was reached by an insertion
-            if traceback_mat[i-1][j] == 1:  # Already in an insertion
+            if traceback_mat[i-1][j] == 2:  # Already in an insertion
                 insertion_score = score_mat[i-1][j] + gap_extend
             else:  # Opening a new insertion
                 insertion_score = score_mat[i-1][j] + gap_open
@@ -595,11 +596,11 @@ def smith_waterman_for_fragment(tRNA, fragment):
                     length_mat[i][j] = length_mat[i-1][j-1]
             elif best_score == deletion_score:
                 # Deletion (gap in tRNA)
-                traceback_mat[i][j] = 2
+                traceback_mat[i][j] = 1
                 length_mat[i][j] = length_mat[i][j-1]
             else:
                 # Insertion (gap in fragment)
-                traceback_mat[i][j] = 1
+                traceback_mat[i][j] = 2
                 length_mat[i][j] = length_mat[i-1][j]
             
             # Track overall best score
@@ -764,6 +765,12 @@ def fragment_align(sub_sequence, ref_sequence, five_clip, three_clip):
     # Step 2: Quality control - filter out poor alignments
     # The length_mat tracks number of matches, requiring at least 10 matches
     # helps avoid reporting spurious short alignments that occur by chance
+
+    # Check if any position met the minimum match requirement
+    if tRNA_start == 0 and frag_start == 0:
+        # No position had >= min_matches
+        return None, None, None, None, None, None
+    
     if length_mat[tRNA_start, frag_start] < 10:
         # Return None for all values to indicate alignment failure
         return None, None, None, None, None, None
@@ -922,12 +929,12 @@ def trim_cigar_to_matches(cigar_tuples):
 
 @njit(fastmath = True, cache = True)
 def compare_shot_in_the_dark(result2_ed, result2_start, result2_end, result1_ed, result1_start, result1_end):
-    if result2_end - result2_start <= 0:
+    if result2_start - result2_end <= 0:
         return False
-    elif result1_end - result1_start <= 0:
+    elif result1_start - result1_end <= 0:
         return True
-    if ((result2_end - result2_start - result2_ed) / (result2_end - result2_start) > 
-        (result1_end - result1_start - result1_ed) / (result1_end - result1_start)):
+    if ((result2_start - result2_end - result2_ed) / (result2_start - result2_end) > 
+        (result1_start - result1_end - result1_ed) / (result1_start - result1_end)):
         return True
     return False
 
@@ -949,7 +956,24 @@ def frag_update(pre_cigar_first, pre_cigar_last, post_cigar_first, post_cigar_la
         five_shift += post_cigar_last[1]
 
     return (five_shift, three_shift)
-    
+
+@njit(fastmath = True, cache = True)
+def ident_from_cigar(cigar_tuples):
+    matches = 0
+    mismatches = 0
+    insertions = 0
+    deletions = 0
+    for tup in cigar_tuples:
+        if tup[0] == 7:
+            matches += tup[1]
+        elif tup[0] == 8:
+            mismatches += tup[1]
+        elif tup[0] == 1:
+            insertions += tup[1]
+        elif tup[0] == 2:
+            deletions += tup[1]
+    return matches / (matches+mismatches+insertions+deletions)
+
 #This sucks. Would it be faster to make all three reads and just check them? Prolly more accurate...
 def shot_in_the_dark_alignment(pysam_read, top_three_ref_dict):
     #Top three ref dict:
@@ -1004,12 +1028,12 @@ def shot_in_the_dark_alignment(pysam_read, top_three_ref_dict):
     a.flag = 0                                         # Start with unmapped flag (will update if secondary)
     a.tags = pysam_read.get_tags()                     # Preserve any custom tags (RG, BC, etc.)
     a.mapping_quality = 3 - best_index
-    a.set_tag('ls', best_index) #What is ls? last shot?
+    a.set_tag('ls', best_index)
     a.reference_start = best_result[2]
     a.cigar = best_result[0]
     a.set_tag("ED", best_result[1])
     
-    if (a.get_tag("ED") > a.reference_length * 0.4) or 15 > abs(a.reference_end - a.reference_start) - best_result[1]:
+    if (ident_from_cigar(best_result[0])) < 0.6 or 15 > abs(a.reference_end - a.reference_start) - best_result[1]:
         return pysam_read
     else:
         return a    
@@ -1175,7 +1199,7 @@ def align_read(
         # Replace with the better CIGAR from fragment alignment
         a.cigar = cigar
     
-    elif (a.get_tag("ED") > a.reference_length * 0.35) or 15 > abs(a.reference_end - a.reference_start) - edit_dist:
+    elif ident_from_cigar(a.cigartuples) < 0.6 or 15 > abs(a.reference_end - a.reference_start) - edit_dist:
         return pysam_read
         
     # Return the completed alignment record, ready for output to BAM/SAM
