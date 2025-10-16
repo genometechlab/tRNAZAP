@@ -51,8 +51,7 @@ def monitor_progress(shm_name, total_work):
             pbar.update(current_value - last_value)
             last_value = current_value
 
-        # Check every 100ms
-        time.sleep(0.005)
+        time.sleep(0.001)
 
     pbar.close()
 

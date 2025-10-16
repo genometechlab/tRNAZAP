@@ -73,7 +73,7 @@ def run_align(
     # validation dataset it adds a ground truth label ('gt').
     inference_dict = load_inference_obj(inference_list)
 
-    splt_reads = split_read_ids(inference_dict, threads)
+    #splt_reads = split_read_ids(inference_dict, threads)
 
     monitor_counter = create_shared_counter()
     monitor = create_monitor(monitor_counter.name, len(inference_dict))
@@ -109,9 +109,7 @@ def run_align(
         print(f"WARNING: Counter exceeded expected by {-missing}")
     
     # Now check and stop the monitor
-    print(f"Monitor alive before join: {monitor.is_alive()}")
     monitor.join(timeout=5)
-    print(f"Monitor alive after join: {monitor.is_alive()}")
 
     if monitor.is_alive():
         print("WARNING: Monitor thread still running!")

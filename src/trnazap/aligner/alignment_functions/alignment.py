@@ -13,7 +13,7 @@ from numba import njit
 numba.set_num_threads(1)
 
 @njit(cache = True, fastmath = True)
-def wagner_fisher_affine(s: str, t: str):
+def wagner_fisher_affine(s: str, t: str, gap_open = 2, gap_extend = 0.5):
     """Optimized Levenshtein distance calculation for tRNA.
 
     This implementation is specialized for tRNA alignment
@@ -518,7 +518,7 @@ def check_fragment(cigar, reference_length, min_del_proportion=0.15):
     return False
 
 @njit(parallel=True, cache=True, fastmath=True)
-def smith_waterman_for_fragment(tRNA, fragment):
+def smith_waterman_for_fragment(tRNA, fragment, gap_open = -6, gap_extend = -1, match_score = +3, mismatch_score = -1):
     """Perform Smith-Waterman local alignment with affine gap penalties.
     
     Simplified implementation that uses the traceback matrix itself to track
@@ -532,10 +532,10 @@ def smith_waterman_for_fragment(tRNA, fragment):
         tuple: (score_mat, traceback_mat, length_mat, tRNA_start, frag_start)
     """
     # Affine gap scoring parameters
-    gap_open = -6       # Penalty for opening a new gap (higher)
-    gap_extend = -1     # Penalty for extending an existing gap (lower)
-    match_score = +3    # Reward for matching bases
-    mismatch_score = -1 # Penalty for mismatched bases
+    #gap_open = -6       # Penalty for opening a new gap (higher)
+    #gap_extend = -1     # Penalty for extending an existing gap (lower)
+    #match_score = +3    # Reward for matching bases
+    #mismatch_score = -1 # Penalty for mismatched bases
     min_matches = 15 #Only consider scores for regions with 15 matches
     
     # Get sequence lengths

@@ -293,8 +293,8 @@ def make_sub_bam(args_list):
                 if pi not in counted_pi_reads and int(pi[:8], 16) % threads == sub_index and pi in inference_dict:
                     counted_pi_reads.add(pi)
                     reads_processed += 1
-                    if reads_processed % 5000 == 0:
-                        increment_counter(monitor, 5000)
+                    if reads_processed % 100 == 0:
+                        increment_counter(monitor, 100)
                 continue
         
             if int(read.query_name[:8], 16) % threads != sub_index:
@@ -347,8 +347,8 @@ def make_sub_bam(args_list):
                         secondary_read.mapping_quality = 0
 
             reads_processed += 1
-            if reads_processed % 5000 == 0:
-                increment_counter(monitor, 5000)
+            if reads_processed % 100 == 0:
+                increment_counter(monitor, 100)
             # Handle unmapped reads - write them as-is without further processing
             # These are reads where the alignment algorithm couldn't find a good match
             if aligned_read.is_unmapped:
@@ -380,13 +380,8 @@ def make_sub_bam(args_list):
                 if allow_secondary and not secondary_read.is_unmapped:
                     outf.write(secondary_read)
                     
-    increment_counter(monitor, (reads_processed % 5000))
+    increment_counter(monitor, (reads_processed % 100))
 
-    #if reads_processed % 1000 != 0:
-    #    increment_counter(monitor, reads_processed % 1000)
-    #if reads_processed != len(read_id_set):
-    #    increment_counter(monitor, reads_processed
-    # Return the output path for potential chaining or confirmation
     return outpath
 
 def check_cigar(cig_stats, query_sequence_len, cigarstring, query_sequence, reference_name, reference_start, reference_sequence, tags):
