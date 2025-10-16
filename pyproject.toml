@@ -15,7 +15,7 @@ dependencies = [
     "pod5",
     "pyarrow",
     "torch",
-    "torchcrf"
+    "pytorch-crf"
     ]
 
 [tool.black]
