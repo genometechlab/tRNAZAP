@@ -14,7 +14,8 @@ dependencies = [
     "pysam>=0.22.0",
     "pod5",
     "pyarrow",
-    "torch"
+    "torch",
+    "torchcrf"
     ]
 
 [tool.black]
