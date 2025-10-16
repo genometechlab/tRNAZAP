@@ -5,6 +5,8 @@ os.environ['OMP_NUM_THREADS'] = '1'
 import argparse
 import sys
 from multiprocessing import Pool
+import multiprocessing as mp
+mp.set_start_method('fork', force=True)
 import time
 import numba
 numba.set_num_threads(1)
