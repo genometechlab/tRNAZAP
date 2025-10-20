@@ -23,9 +23,10 @@ def per_class_identity_plot(in_df, out_pre, out_dir):
     fig.set_figheight(2)
     fig.set_figwidth(8)
     sns.boxenplot(data=in_df, x='trna', y='ident', hue='aligner', palette=color_dict)
-    _ = ax.set_xticklabels(ax.get_xticklabels(), rotation=90)
+    ax.set_xticklabels(ax.get_xticklabels(), rotation=45, ha='right')
+    plt.tight_layout()
     out_path = os.path.join(out_dir, f"{out_pre}_per_class_identity.pdf")
-    fig.get_figure().savefig(out_path)
+    fig.savefig(out_path)
 
 
 def class_count_plots(count_df, out_pre, out_dir):
@@ -33,19 +34,21 @@ def class_count_plots(count_df, out_pre, out_dir):
     fig.set_figheight(10)
     fig.set_figwidth(32)
     sns.barplot(data=count_df, x='trna', y='count', hue='aligner')
-    _ = ax.set_xticklabels(ax.get_xticklabels(), rotation=90)
+    ax.set_xticklabels(ax.get_xticklabels(), rotation=45, ha='right')
     ax.set_yscale('log')
+    plt.tight_layout()
     out_path = os.path.join(out_dir, f"{out_pre}_class_counts.pdf")
-    fig.get_figure().savefig(out_path)
+    fig.savefig(out_path)
 
 
 def class_delta_plots(deltas, delta_label, out_pre, out_dir):
     fig, ax = plt.subplots(1)
     fig.set_figwidth(14)
     sns.barplot(y=deltas, x=[i for i in range(len(deltas))])
-    plt.xticks([i for i in range(len(deltas))], delta_label, rotation=90)
+    plt.xticks(range(len(deltas)), delta_label, rotation=45, ha='right')
+    plt.tight_layout()
     out_path = os.path.join(out_dir, f"{out_pre}_deltas_class_counts.pdf")
-    fig.get_figure().savefig(out_path)
+    fig.savefig(out_path)
 
 
 def position_ident_plot(zap_position_ident_dict,
@@ -77,8 +80,9 @@ def position_ident_plot(zap_position_ident_dict,
         # coverage = coverage / max(coverage)
         sns.lineplot(ident, ax=ax[i], color='blue', drawstyle='steps-mid', linestyle="--", label="bwa", legend=False)
     ax[0].legend(loc="best")
+    plt.tight_layout()
     out_path = os.path.join(out_dir, f"{out_pre}_positional_identity.pdf")
-    fig.get_figure().savefig(out_path)
+    fig.savefig(out_path)
 
 
 def plot_alignment_heatmap(count_matrix,
@@ -88,8 +92,11 @@ def plot_alignment_heatmap(count_matrix,
     fig.set_figheight(12)
     fig.set_figwidth(14)
     sns.heatmap(count_matrix, norm=LogNorm(), cmap='viridis', cbar=True)
+    plt.xticks(rotation=45, ha='right')
+    plt.yticks(rotation=0)
+    plt.tight_layout()
     out_path = os.path.join(out_dir, f"{out_pre}_alignment_classification_heatmap.pdf")
-    fig.get_figure().savefig(out_path)
+    fig.savefig(out_path)
 
 
 def plot_classification_heatmap(classification_df,
@@ -100,8 +107,11 @@ def plot_classification_heatmap(classification_df,
     fig.set_figheight(12)
     fig.set_figwidth(14)
     sns.heatmap(classification_df, norm=LogNorm(), cmap='viridis', cbar=True)
+    plt.xticks(rotation=45, ha='right')
+    plt.yticks(rotation=0)
+    plt.tight_layout()
     out_path = os.path.join(out_dir, f"{out_pre}_classification_only_heatmap.pdf")
-    fig.get_figure().savefig(out_path)
+    fig.savefig(out_path)
 
 
 def plot_one_aligner_hist_plots(bwa_no_zap_ident, zap_no_bwa_ident, out_pre, out_dir):
@@ -113,15 +123,17 @@ def plot_one_aligner_hist_plots(bwa_no_zap_ident, zap_no_bwa_ident, out_pre, out
     if len(zap_no_bwa_ident) > 1:
         sns.histplot(zap_no_bwa_ident, binwidth=0.025, label="zap", color='orange', alpha=0.75)
     plt.legend(loc='best')
+    plt.tight_layout()
     out_path = os.path.join(out_dir, f"{out_pre}_one_aligner_only_ident_hist_plot.pdf")
-    fig.get_figure().savefig(out_path)
+    fig.savefig(out_path)
 
 
 def plot_per_read_miss_classified_ident(misclassified_ident_df, out_pre, out_dir):
     fig, ax = plt.subplots(1)
     sns.histplot(data=misclassified_ident_df, x='zap_ident', y='bwa_ident', binwidth=0.025)
+    plt.tight_layout()
     out_path = os.path.join(out_dir, f"{out_pre}_misclassified_read_ident.pdf")
-    fig.get_figure().savefig(out_path)
+    fig.savefig(out_path)
 
 
 def plot_per_read_ident(read_ident_df, out_pre, out_dir):
@@ -129,8 +141,9 @@ def plot_per_read_ident(read_ident_df, out_pre, out_dir):
     fig.set_figwidth(8)
     fig.set_figheight(8)
     sns.histplot(data=read_ident_df, x='zap_ident', y='bwa_ident', binwidth=0.0125)
+    plt.tight_layout()
     out_path = os.path.join(out_dir, f"{out_pre}_pre_read_ident.pdf")
-    fig.get_figure().savefig(out_path)
+    fig.savefig(out_path)
 
 
 def per_read_output(bwamem,

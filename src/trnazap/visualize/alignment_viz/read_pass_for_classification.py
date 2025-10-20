@@ -122,7 +122,7 @@ def multiprocess_trna_data(args):
             assert zap_to_bwa[ref][-3:] == "1-1"
     
     with pysam.AlignmentFile(bwamem) as infile:
-        for read in tqdm(infile):
+        for read in tqdm(infile, position=thread_idx, leave=False):
             if hash_first_hex(read.query_name)%threads != thread_idx:
                 continue
             if read.has_tag('pi'):
@@ -161,7 +161,7 @@ def multiprocess_trna_data(args):
     zap_tRNA_dict = {}
     zap_ident_array = defaultdict(list)
     with pysam.AlignmentFile(zap) as infile:
-        for read in tqdm(infile):
+        for read in tqdm(infile, position=thread_idx, leave=False):
             if hash_first_hex(read.query_name)%threads != thread_idx:
                 continue
             if read.query_name in exclusion_id_set:

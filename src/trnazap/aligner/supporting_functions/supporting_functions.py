@@ -9,6 +9,7 @@ import subprocess
 import itertools
 from importlib.resources import files
 import pysam
+from tqdm import tqdm
 
 from ...aligner.alignment_functions.alignment import align_read, shot_in_the_dark_alignment
 from ...aligner.progress_monitoring.progress import increment_counter
@@ -302,7 +303,13 @@ def make_sub_bam(args_list):
         counted_pi_reads = set()
         # Iterate through all reads in the input BAM file
         # until_eof=True ensures we read the entire file, not just aligned regions
-        for read in ua_bam.fetch(until_eof=True):
+        for read in tqdm(
+            ua_bam.fetch(until_eof=True),
+            desc=f"Process reads that hash to {sub_index}", 
+            position=sub_index,
+            leave=True,
+            total=len(inference_dict)
+        ):
             # Filter reads: only process those that meet both criteria:
             # 1. Have inference predictions (model classified them as tRNA)
             # 2. Are in our target read ID set (additional filtering criterion)
