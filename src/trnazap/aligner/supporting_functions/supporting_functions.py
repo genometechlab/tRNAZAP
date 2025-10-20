@@ -94,7 +94,13 @@ def make_parameter_list(
     out_dir,
     out_prefix,
     all_alignments,
-    monitor
+    monitor,
+    wf_gap_open, 
+    wf_gap_extend, 
+    sw_gap_open,
+    sw_gap_extend,
+    sw_match,
+    sw_mismatch
 ):
     """
     Make a list of parameters to multiprocess alignments.
@@ -125,7 +131,14 @@ def make_parameter_list(
             unaligned_bam_path,
             os.path.join(out_dir, f"{out_prefix}_{i}_temporary.bam"),
             all_alignments,
-            monitor
+            #monitor,
+            None,
+            wf_gap_open, 
+            wf_gap_extend, 
+            sw_gap_open,
+            sw_gap_extend,
+            sw_match,
+            sw_mismatch
         )
         for i in range(threads)
     ]
@@ -264,9 +277,15 @@ def make_sub_bam(args_list):
         unaligned_bam_path,  # Input BAM file with unaligned reads
         outpath,
         allow_secondary,
-        monitor
+        monitor, 
+        wf_gap_open, 
+        wf_gap_extend, 
+        sw_gap_open,
+        sw_gap_extend,
+        sw_match,
+        sw_mismatch
     ) = args_list  # Output path for the new aligned BAM file
-
+    progress = monitor
     # Open the unaligned BAM file for reading
     # check_sq=False allows reading BAM files without proper SQ (sequence) headers
     # This is common for unaligned BAM files that may not have reference info
@@ -294,7 +313,8 @@ def make_sub_bam(args_list):
                     counted_pi_reads.add(pi)
                     reads_processed += 1
                     if reads_processed % 100 == 0:
-                        increment_counter(monitor, 100)
+                        if progress is not None:
+                            increment_counter(monitor, 100)
                 continue
         
             if int(read.query_name[:8], 16) % threads != sub_index:
@@ -323,6 +343,12 @@ def make_sub_bam(args_list):
                     i_dict,
                     assigned_ref_index,
                     assigned_ref_sequence,
+                    wf_gap_open, 
+                    wf_gap_extend, 
+                    sw_gap_open,
+                    sw_gap_extend,
+                    sw_match,
+                    sw_mismatch
                 )
                 if i_dict[-1] == '1':
                     aligned_read.set_tag('pf', 1) #Predicted Fragment
@@ -335,6 +361,12 @@ def make_sub_bam(args_list):
                         i_dict,
                         ref_dict[secondary_ref]['reference_index'],
                         ref_dict[secondary_ref]['reference_seq'],
+                        wf_gap_open, 
+                        wf_gap_extend, 
+                        sw_gap_open,
+                        sw_gap_extend,
+                        sw_match,
+                        sw_mismatch,
                         secondary = True)
 
                 if allow_secondary and secondary_better(aligned_read, secondary_read, min_ident_improvement = 0.001):
@@ -348,7 +380,8 @@ def make_sub_bam(args_list):
 
             reads_processed += 1
             if reads_processed % 100 == 0:
-                increment_counter(monitor, 100)
+                if progress is not None:
+                    increment_counter(monitor, 100)
             # Handle unmapped reads - write them as-is without further processing
             # These are reads where the alignment algorithm couldn't find a good match
             if aligned_read.is_unmapped:
@@ -359,7 +392,13 @@ def make_sub_bam(args_list):
                     1: [ref_dict[i_dict[2]]['reference_index'], ref_dict[i_dict[2]]['reference_seq']],
                     2: [ref_dict[i_dict[3]]['reference_index'], ref_dict[i_dict[3]]['reference_seq']]
                 }
-                aligned_read = shot_in_the_dark_alignment(read, top_three_ref_dict)
+                aligned_read = shot_in_the_dark_alignment(
+                    read, 
+                    top_three_ref_dict, 
+                    sw_gap_open,
+                    sw_gap_extend,
+                    sw_match,
+                    sw_mismatch)
                 if aligned_read.is_unmapped:
                     outf.write(aligned_read)
                     continue
@@ -379,8 +418,8 @@ def make_sub_bam(args_list):
             if not aligned_read.has_tag('ls'):
                 if allow_secondary and not secondary_read.is_unmapped:
                     outf.write(secondary_read)
-                    
-    increment_counter(monitor, (reads_processed % 100))
+    if progress is not None:                
+        increment_counter(monitor, (reads_processed % 100))
 
     return outpath
 

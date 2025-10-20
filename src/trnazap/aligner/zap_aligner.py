@@ -16,7 +16,20 @@ from .inference_functions.process_inference import load_inference_obj
 from .progress_monitoring.progress import create_shared_counter, create_monitor, get_counter_value, increment_counter
 
 def run_align(
-    unaligned_bam, inference_list, out_dir, out_pre, threads, model, secondary
+    unaligned_bam, 
+    inference_list, 
+    out_dir, 
+    out_pre, 
+    threads, 
+    model, 
+    secondary,
+    wf_gap_open,
+    wf_gap_extend, 
+    sw_gap_open,
+    sw_gap_extend,
+    sw_match,
+    sw_mismatch,
+    pickled = False
 ):
     """Execute tRNA basecall alignment and inference workflow.
 
@@ -73,7 +86,7 @@ def run_align(
     # Inference dict includes information for each read about the highest probablity
     # class, the indicies for tRNA in signal space, and if this is a training or
     # validation dataset it adds a ground truth label ('gt').
-    inference_dict = load_inference_obj(inference_list)
+    inference_dict = load_inference_obj(inference_list, pickled)
 
     #splt_reads = split_read_ids(inference_dict, threads)
 
@@ -90,7 +103,13 @@ def run_align(
         out_dir,
         out_pre,
         secondary,
-        monitor_counter.name
+        monitor_counter.name,
+        wf_gap_open, 
+        wf_gap_extend, 
+        sw_gap_open,
+        sw_gap_extend,
+        sw_match,
+        sw_mismatch
     )
 
     with Pool(threads) as p:

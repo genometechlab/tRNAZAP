@@ -35,8 +35,8 @@ def wagner_fisher_affine(s: str, t: str, gap_open = 2, gap_extend = 0.5):
             - ndarray: The complete dynamic programming
             matrix
     """
-    gap_open = 2
-    gap_extend = 0.5
+    #gap_open = 2
+    #gap_extend = 0.5
     
     m, n = len(s), len(t)
     d = np.zeros(shape=(m + 1, n + 1), dtype=np.float32)
@@ -173,8 +173,8 @@ def wagner_fisher_truncated(dist_mat, move_mat):
     # truncated matrix, and the truncation point
     return move_mat[: truncate_idx + 1, :], trav[(truncate_idx, -1)], truncate_idx
 
-def compute_edit_operations_affine(s: str, t: str):
-    move_mat, dist_mat = wagner_fisher_affine(s, t)
+def compute_edit_operations_affine(s: str, t: str, gap_open = 2, gap_extend = 0.5):
+    move_mat, dist_mat = wagner_fisher_affine(s, t, gap_open, gap_extend)
     move_mat, start, stop = wagner_fisher_truncated(dist_mat, move_mat)
     
     # Get dimensions of the truncated matrix
@@ -213,7 +213,7 @@ def compute_edit_operations_affine(s: str, t: str):
         idx -= 1
 
     return instr_array[idx + 1 :], start, stop   
-        
+'''        
 def compute_edit_operations(s: str, t: str):
     """
     Compute the edit operations required to transform s (query) into t (reference).
@@ -290,9 +290,9 @@ def compute_edit_operations(s: str, t: str):
         idx -= 1
 
     return instr_array[idx + 1 :], start, stop
+'''
 
-
-def edit_instructions(s: str, t: str):
+def edit_instructions(s: str, t: str, wf_gap_open = 2.0, wf_gap_extend = 0.5,):
     """
     Convert operation codes to human-readable edit instructions.
 
@@ -310,7 +310,7 @@ def edit_instructions(s: str, t: str):
             - int: Starting position in the query
             - int: Ending position in the query
     """
-    operation_codes, start, stop = compute_edit_operations_affine(s, t)
+    operation_codes, start, stop = compute_edit_operations_affine(s, t, wf_gap_open, wf_gap_extend)
 
     # Convert codes to characters in a Python list
     instructions = [chr(code) for code in operation_codes]
@@ -409,39 +409,6 @@ def cigar_tuples_from_edit_instrucitons(
     #print(f"{query_start=} {five_clip=} {query_end=} {three_clip=} {cigar_tuples=} {instructions=}")
     return cigar_tuples, int(edit_distance)
 
-
-def identity_from_cigar(cigar_tuples):
-    """
-    Calculate the sequence identity percentage from a CIGAR string.
-
-    Sequence identity is the proportion of matched positions to the
-    total alignment length, excluding soft-clipped bases.
-
-    Args:
-        cigar_string: String representation of CIGAR operations
-
-    Returns:
-        float: Proportion of matched positions (0.0 to 1.0)
-    """
-    tuples = cigar_tuples
-    total_align_length = 0
-    matches = 0
-
-    for count, op in tuples:
-        if op == "S":  # Skip soft-clipped bases
-            continue
-        if op == "=":  # Count matches (Note: M includes both matches and mismatches)
-            matches += count
-            total_align_length += count
-        else:  # Count other operations in alignment length
-            total_align_length += count
-
-    # Avoid division by zero
-    if total_align_length == 0:
-        return 0.0
-
-    return matches / total_align_length
-
 #Could be njit if we preprocess the pysam read parts?
 def subset_sequence(pysam_read, trna_indices):
     """
@@ -517,7 +484,7 @@ def check_fragment(cigar, reference_length, min_del_proportion=0.15):
         return True
     return False
 
-@njit(parallel=True, cache=True, fastmath=True)
+@njit(cache=True, fastmath=True)
 def smith_waterman_for_fragment(tRNA, fragment, gap_open = -6, gap_extend = -1, match_score = +3, mismatch_score = -1):
     """Perform Smith-Waterman local alignment with affine gap penalties.
     
@@ -723,7 +690,14 @@ def edit_instructions_from_smith_waterman(traceback_mat, max_len, tRNA_start, fr
     # (confusingly named 'end' when put in dynamic programming context)
     return edit_instructions[instruction_pos+1:], i, j
 
-def fragment_align(sub_sequence, ref_sequence, five_clip, three_clip):
+def fragment_align(sub_sequence, 
+                   ref_sequence, 
+                   five_clip, 
+                   three_clip,    
+                   sw_gap_open = -6.0,
+                   sw_gap_extend = -1.0,
+                   sw_match = 3.0,
+                   sw_mismatch = 1.0,):
     """Align a fragment sequence to a reference sequence and generate CIGAR string.
     
     This function orchestrates the complete alignment pipeline: running Smith-Waterman,
@@ -759,7 +733,11 @@ def fragment_align(sub_sequence, ref_sequence, five_clip, three_clip):
     # which is where the alignment ENDS (not where it starts!)
     score_mat, traceback_mat, length_mat, tRNA_start, frag_start = smith_waterman_for_fragment(
         ref_sequence,   # Reference sequence (rows in matrix)
-        sub_sequence    # Query sequence (columns in matrix)
+        sub_sequence,    # Query sequence (columns in matrix)
+        sw_gap_open,
+        sw_gap_extend,
+        sw_match,
+        sw_mismatch,
     )
     
     # Step 2: Quality control - filter out poor alignments
@@ -975,11 +953,23 @@ def ident_from_cigar(cigar_tuples):
     return matches / (matches+mismatches+insertions+deletions)
 
 #This sucks. Would it be faster to make all three reads and just check them? Prolly more accurate...
-def shot_in_the_dark_alignment(pysam_read, top_three_ref_dict):
+def shot_in_the_dark_alignment(pysam_read, 
+                               top_three_ref_dict, 
+                               sw_gap_open = -6.0,
+                               sw_gap_extend = -1.0,
+                               sw_match = 3.0,
+                               sw_mismatch = 1.0,):
     #Top three ref dict:
     # {index : [ref_index, ref_sequence]}
     # This will be 0, 1, 2 based on the order of classification
-    pre_results = [fragment_align(pysam_read.query_sequence, top_three_ref_dict[i][1], 0 , 0) for i in range(3)]
+    pre_results = [fragment_align(pysam_read.query_sequence, 
+                                  top_three_ref_dict[i][1], 
+                                  0 , 
+                                  0, 
+                                  sw_gap_open, 
+                                  sw_gap_extend, 
+                                  sw_match, 
+                                  sw_mismatch) for i in range(3)]
     results = []
     for pr in pre_results:
         if pr[0] is None:  # Skip failed alignments
@@ -1039,7 +1029,17 @@ def shot_in_the_dark_alignment(pysam_read, top_three_ref_dict):
         return a    
 
 def align_read(
-    pysam_read, inference_dict_read, ref_index, ref_sequence, secondary=False
+    pysam_read, 
+    inference_dict_read, 
+    ref_index, 
+    ref_sequence, 
+    wf_gap_open = 2.0, 
+    wf_gap_extend = 0.5, 
+    sw_gap_open = -6.0,
+    sw_gap_extend = -1.0,
+    sw_match = 3.0,
+    sw_mismatch = 1.0,
+    secondary=False
 ):
     """Create a new alignment for a sequencing read against a tRNA reference sequence.
     
@@ -1122,7 +1122,7 @@ def align_read(
     # - edit_instruction_list: sequence of operations (match/mismatch/insertion/deletion)
     # - start: where alignment begins in the query
     # - stop: where alignment ends in the query
-    (edit_instruction_list, start, stop) = edit_instructions(sub_sequence, ref_sequence)
+    (edit_instruction_list, start, stop) = edit_instructions(sub_sequence, ref_sequence, wf_gap_open, wf_gap_extend)
     
     # Set the alignment position on the reference
     # Starting at 0 means we're aligning to the beginning of the reference tRNA
@@ -1171,7 +1171,14 @@ def align_read(
         # Try a more permissive fragment-based alignment approach
         # This might find a better local alignment for partial sequences
         cigar, edit_dist, ref_start, ref_stop, query_start, query_stop = fragment_align(
-            sub_sequence, ref_sequence, five_slice, three_slice
+            sub_sequence, 
+            ref_sequence, 
+            five_slice, 
+            three_slice, 
+            sw_gap_open, 
+            sw_gap_extend,
+            sw_match,
+            sw_mismatch,
         )
         
         if (cigar is None or 
@@ -1179,13 +1186,9 @@ def align_read(
            ):
             return pysam_read
         
-        #print(f"pre-{cigar=}")
         cigar, ref_shift, edit_offset = trim_cigar_to_matches(cigar)
         edit_dist = edit_dist - edit_offset
         ref_stop += ref_shift
-        #print(f"post-{cigar=}")
-        
-            
         
         # If fragment alignment succeeded and is better than our original alignment
         # (lower edit distance = better alignment), use it instead

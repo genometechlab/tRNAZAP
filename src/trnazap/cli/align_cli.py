@@ -111,6 +111,30 @@ def register_subparser(subparsers):
         + "mitochondrail tRNA (human-mt), yeast tRNA (yeast),"
         + " and E. Coli tRNA (e_coli).",
     )
+
+    parser.add_argument(
+        "--pickled_inf_obj",
+        default=False,
+        action="store_true",
+        help="A pre pickled inference obj to reduce repeat run speed"
+    )
+
+    # Wagner-Fisher alignment parameters
+    parser.add_argument("--wf_gap_open", type=float, default=2.0, 
+                       help="Wagner-Fisher gap open penalty (default: 2.0)")
+    parser.add_argument("--wf_gap_extend", type=float, default=0.5,
+                       help="Wagner-Fisher gap extend penalty (default: 0.5)")
+    
+    # Smith-Waterman alignment parameters
+    parser.add_argument("--sw_gap_open", type=float, default=-6.0,
+                       help="Smith-Waterman gap open penalty (default: -6.0)")
+    parser.add_argument("--sw_gap_extend", type=float, default=-1.0,
+                       help="Smith-Waterman gap extend penalty (default: -1.0)")
+    parser.add_argument("--sw_match", type=float, default=3.0,
+                       help="Smith-Waterman match score (default: 3.0)")
+    parser.add_argument("--sw_mismatch", type=float, default=1.0,
+                       help="Smith-Waterman mismatch penalty (default: 1.0)")
+    
     # Set the function to call when this subcommand is used
     parser.set_defaults(func=run_align_wrapper)
 
@@ -118,13 +142,22 @@ def register_subparser(subparsers):
 def run_align_wrapper(FLAGS):
     """Wrapper to Execute the align subcommand."""
     
-    run_align(FLAGS.unaligned_bam,
-              FLAGS.inference,
-              FLAGS.out_dir,
-              FLAGS.out_pre,
-              FLAGS.threads,
-              FLAGS.model,
-              FLAGS.secondary)
+    run_align(
+        FLAGS.unaligned_bam,
+        FLAGS.inference,
+        FLAGS.out_dir,
+        FLAGS.out_pre,
+        FLAGS.threads,
+        FLAGS.model,
+        FLAGS.secondary,
+        FLAGS.wf_gap_open,
+        FLAGS.wf_gap_extend,
+        FLAGS.sw_gap_open,
+        FLAGS.sw_gap_extend,
+        FLAGS.sw_match,
+        FLAGS.sw_mismatch,
+        FLAGS.pickled_inf_obj
+    )
     
 
 if __name__ == "__main__":
@@ -194,8 +227,32 @@ if __name__ == "__main__":
         + " and E. Coli tRNA (e_coli).",
     )
 
+    parser.add_argument(
+        "--pickled_inf_obj",
+        default=False,
+        action="store_true"
+    )
+
+    # Wagner-Fisher alignment parameters
+    parser.add_argument("--wf_gap_open", type=float, default=2.0, 
+                       help="Wagner-Fisher gap open penalty (default: 2.0)")
+    parser.add_argument("--wf_gap_extend", type=float, default=0.5,
+                       help="Wagner-Fisher gap extend penalty (default: 0.5)")
+    
+    # Smith-Waterman alignment parameters
+    parser.add_argument("--sw_gap_open", type=float, default=-6.0,
+                       help="Smith-Waterman gap open penalty (default: -6.0)")
+    parser.add_argument("--sw_gap_extend", type=float, default=-1.0,
+                       help="Smith-Waterman gap extend penalty (default: -1.0)")
+    parser.add_argument("--sw_match", type=float, default=3.0,
+                       help="Smith-Waterman match score (default: 3.0)")
+    parser.add_argument("--sw_mismatch", type=float, default=1.0,
+                       help="Smith-Waterman mismatch penalty (default: 1.0)")
+
+    
+
     FLAGS, unparsed = parser.parse_known_args()
-    main(
+    run_align(
         FLAGS.unaligned_bam,
         FLAGS.inference,
         FLAGS.out_dir,
@@ -203,4 +260,11 @@ if __name__ == "__main__":
         FLAGS.threads,
         FLAGS.model,
         FLAGS.secondary,
+        FLAGS.wf_gap_open,
+        FLAGS.wf_gap_extend,
+        FLAGS.sw_gap_open,
+        FLAGS.sw_gap_extend,
+        FLAGS.sw_match,
+        FLAGS.sw_mismatch,
+        FLAGS.pickled_inf_obj
     )

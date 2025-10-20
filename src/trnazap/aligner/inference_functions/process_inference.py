@@ -3,10 +3,12 @@ import torch
 import os
 import numpy as np
 from tqdm import tqdm
+import pickle
+import sys
 
 #TODO: Fix the logic for loading files
 
-def load_inference_obj(inference_path):
+def load_inference_obj(inference_path, pickled=False):
     """
     Read in the pickled inference object(s).
     params:
@@ -15,6 +17,10 @@ def load_inference_obj(inference_path):
     return: A dictionary for each read in the dataset.
     """
     from ...io import ZIRReader
+
+    if pickled:
+        with open(inference_path[0], 'rb') as infile:
+            return pickle.load(infile)
     
     # Handle single path vs list
     if isinstance(inference_path, (list, tuple)):
@@ -112,5 +118,12 @@ def from_dir(dir_path):
                 fragment = str(read_result.fragmentation_pred)
                 inference_obj[read_result.read_id] = (cls_, variable_region, secondary_cls, tertiary_cls, fragment)
     return inference_obj
+
+if __name__ == "__main__":
+    inf_obj = load_inference_obj(sys.argv[1])
+
+    with open(sys.argv[2], 'wb') as outfile:
+        pickle.dump(inf_obj, outfile)
+    
         
         
