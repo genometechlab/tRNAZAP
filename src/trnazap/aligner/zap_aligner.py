@@ -90,9 +90,9 @@ def run_align(
 
     #splt_reads = split_read_ids(inference_dict, threads)
 
-    monitor_counter = create_shared_counter()
-    monitor = create_monitor(monitor_counter.name, len(inference_dict))
-    monitor.start()
+    #monitor_counter = create_shared_counter()
+    #monitor = create_monitor(monitor_counter.name, len(inference_dict))
+    #monitor.start()
     
     p_list = make_parameter_list(
         threads,
@@ -103,7 +103,8 @@ def run_align(
         out_dir,
         out_pre,
         secondary,
-        monitor_counter.name,
+        #monitor_counter.name,
+        None,
         wf_gap_open, 
         wf_gap_extend, 
         sw_gap_open,
@@ -117,25 +118,25 @@ def run_align(
 
     print("Finished Aligning")
     # Update counter to complete the progress bar
-    current_count = get_counter_value(monitor_counter.name)
-    missing = len(inference_dict) - current_count  # You'll need to have total_work defined
+    #current_count = get_counter_value(monitor_counter.name)
+    #missing = len(inference_dict) - current_count  # You'll need to have total_work defined
     
-    if missing > 0:
-        print(f"Updating counter with {missing} missing reads")
-        increment_counter(monitor_counter.name, missing)
+    #if missing > 0:
+    #    print(f"Updating counter with {missing} missing reads")
+    #    increment_counter(monitor_counter.name, missing)
         
         # Give monitor thread time to see the update and reach 100%
-        time.sleep(0.2)
-    elif missing < 0:
-        print(f"WARNING: Counter exceeded expected by {-missing}")
+    #    time.sleep(0.2)
+    #elif missing < 0:
+    #    print(f"WARNING: Counter exceeded expected by {-missing}")
     
     # Now check and stop the monitor
-    monitor.join(timeout=5)
+    #monitor.join(timeout=5)
 
-    if monitor.is_alive():
-        print("WARNING: Monitor thread still running!")
-    monitor_counter.close()
-    monitor_counter.unlink()
+    #if monitor.is_alive():
+    #    print("WARNING: Monitor thread still running!")
+    #monitor_counter.close()
+    #monitor_counter.unlink()
     
     print(files)
 
