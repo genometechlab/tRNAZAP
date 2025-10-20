@@ -122,11 +122,19 @@ class Inference(InferenceBase):
         producer_pbar = None
         consumer_pbar = None
         if show_progress:
+            bar_fmt = (
+                "{desc:<20} "
+                "{percentage:6.2f}%|"
+                "{bar:30}| "
+                "{n_fmt}/{total_fmt} "
+                "[{elapsed}/{remaining}, {rate_fmt}]"
+            )
             producer_pbar = tqdm(
                 desc="Reading POD5",
                 unit="reads",
                 total=num_reads,
                 leave=True,
+                bar_format=bar_fmt,
                 position=0
             )
             consumer_pbar = tqdm(
@@ -134,6 +142,7 @@ class Inference(InferenceBase):
                 unit="reads",
                 total=num_reads,
                 leave=True,
+                bar_format=bar_fmt,
                 position=1
             )
 
