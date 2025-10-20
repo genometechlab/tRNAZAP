@@ -194,7 +194,6 @@ class ModelLoader:
             raise ValueError("No checkpoint path provided")
             
         load_weights(self.model, checkpoint_path)
-        print(f"Loaded checkpoint from {checkpoint_path}")
         
     def get_model(self, load_checkpoint: bool = True) -> ModelProtocol:
         """
