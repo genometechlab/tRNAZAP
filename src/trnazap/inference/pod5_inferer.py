@@ -17,7 +17,7 @@ from tqdm.auto import tqdm
 from .inference_base import InferenceBase
 from ..config.model_config import ModelConfig, ModelLoader
 from ..feeders import SequenceStandardizer, load_signal, collate_fn
-from ..storages import InferenceResults, InferenceMetadata, ReadResult
+from ..storages import InferenceResults, InferenceMetadata, ReadResult, ReadResultCompressed
 from ..utils import PathSet
 from ..io import ZIRWriter, ZIRShardManager
 
@@ -37,6 +37,7 @@ class Inference(InferenceBase):
         self,
         config: Union[ModelConfig, str, Dict],
         device: Optional[torch.device] = None,
+        full_details: bool = True,
     ) -> None:
         self.config: ModelConfig = self._load_config(config)
         if isinstance(device, str):
@@ -45,6 +46,8 @@ class Inference(InferenceBase):
             self.device = device
         else:
             self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            
+        self.full_details = full_details
 
         self.queue_size_mult = 4
         
@@ -372,6 +375,8 @@ class Inference(InferenceBase):
                 num_chunks=num_chunks,
                 chunk_size=self.config.chunk_size
             )
+            if not self.full_details:
+                result = result.to_compressed(k=3)
             results.append(result)
         
         return results
