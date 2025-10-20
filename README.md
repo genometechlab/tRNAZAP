@@ -1,5 +1,5 @@
-![tRNAZAP](images/logo.png)
-# tRNA_zap
+<img src="images/logo.png" alt="tRNAZAP" width="300"/>
+
 tRNA ionic current model and alignment tools
 
 ## Table of Contents
