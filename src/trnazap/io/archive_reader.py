@@ -410,7 +410,7 @@ class ZIRReader:
                 if ref.get(field) != m.get(field):
                     raise ValueError(f"Metadata mismatch in {self._paths[i]}: {field} differs")
         # Optional: warn on soft fields
-        for field in ["batch_size", "device", "float_dtype"]:
+        for field in ["float_dtype"]:
             vals = {m.get(field) for m in metas}
             if len(vals) > 1:
                 logger.warning("Field '%s' differs across archives: %s", field, list(vals))
