@@ -119,6 +119,13 @@ def register_subparser(subparsers):
         help="A pre pickled inference obj to reduce repeat run speed"
     )
 
+    parser.add_argument(
+        "--ident_threshold",
+        default=0.75,
+        required=False,
+        help="Minimum identity threshold for reads to be considered"
+    )
+
     # Wagner-Fisher alignment parameters
     parser.add_argument("--wf_gap_open", type=float, default=2.0, 
                        help="Wagner-Fisher gap open penalty (default: 2.0)")
@@ -150,6 +157,7 @@ def run_align_wrapper(FLAGS):
         FLAGS.threads,
         FLAGS.model,
         FLAGS.secondary,
+        FLAGS.ident_threshold,
         FLAGS.wf_gap_open,
         FLAGS.wf_gap_extend,
         FLAGS.sw_gap_open,
@@ -232,6 +240,13 @@ if __name__ == "__main__":
         default=False,
         action="store_true"
     )
+    
+    parser.add_argument(
+        "--ident_threshold",
+        default=0.75,
+        required=False,
+        help="Minimum identity threshold for reads to be considered"
+    )
 
     # Wagner-Fisher alignment parameters
     parser.add_argument("--wf_gap_open", type=float, default=2.0, 
@@ -260,6 +275,7 @@ if __name__ == "__main__":
         FLAGS.threads,
         FLAGS.model,
         FLAGS.secondary,
+        FLAGS.ident_threshold,
         FLAGS.wf_gap_open,
         FLAGS.wf_gap_extend,
         FLAGS.sw_gap_open,

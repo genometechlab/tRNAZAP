@@ -96,6 +96,7 @@ def make_parameter_list(
     out_prefix,
     all_alignments,
     monitor,
+    ident_threshold,
     wf_gap_open, 
     wf_gap_extend, 
     sw_gap_open,
@@ -134,6 +135,7 @@ def make_parameter_list(
             all_alignments,
             #monitor,
             None,
+            ident_threshold,
             wf_gap_open, 
             wf_gap_extend, 
             sw_gap_open,
@@ -279,6 +281,7 @@ def make_sub_bam(args_list):
         outpath,
         allow_secondary,
         monitor, 
+        ident_threshold,
         wf_gap_open, 
         wf_gap_extend, 
         sw_gap_open,
@@ -315,6 +318,7 @@ def make_sub_bam(args_list):
             # 2. Are in our target read ID set (additional filtering criterion)
 
             if read.has_tag('pi'):
+                '''
                 pi = read.get_tag('pi')
                 if pi not in counted_pi_reads and int(pi[:8], 16) % threads == sub_index and pi in inference_dict:
                     counted_pi_reads.add(pi)
@@ -322,6 +326,7 @@ def make_sub_bam(args_list):
                     if reads_processed % 100 == 0:
                         if progress is not None:
                             increment_counter(monitor, 100)
+                '''
                 continue
         
             if int(read.query_name[:8], 16) % threads != sub_index:
@@ -355,7 +360,8 @@ def make_sub_bam(args_list):
                     sw_gap_open,
                     sw_gap_extend,
                     sw_match,
-                    sw_mismatch
+                    sw_mismatch,
+                    ident_threshold = ident_threshold
                 )
                 if i_dict[-1] == '1':
                     aligned_read.set_tag('pf', 1) #Predicted Fragment
@@ -374,7 +380,8 @@ def make_sub_bam(args_list):
                         sw_gap_extend,
                         sw_match,
                         sw_mismatch,
-                        secondary = True)
+                        secondary = True,
+                        ident_threshold = ident_threshold)
 
                 if allow_secondary and secondary_better(aligned_read, secondary_read, min_ident_improvement = 0.001):
                     aligned_read, secondary_read = secondary_read, aligned_read
@@ -402,6 +409,7 @@ def make_sub_bam(args_list):
                 aligned_read = shot_in_the_dark_alignment(
                     read, 
                     top_three_ref_dict, 
+                    ident_threshold,
                     sw_gap_open,
                     sw_gap_extend,
                     sw_match,

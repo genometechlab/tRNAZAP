@@ -955,6 +955,7 @@ def ident_from_cigar(cigar_tuples):
 #This sucks. Would it be faster to make all three reads and just check them? Prolly more accurate...
 def shot_in_the_dark_alignment(pysam_read, 
                                top_three_ref_dict, 
+                               ident_threshold,
                                sw_gap_open = -6.0,
                                sw_gap_extend = -1.0,
                                sw_match = 3.0,
@@ -988,7 +989,7 @@ def shot_in_the_dark_alignment(pysam_read,
     
     best_index = 0
     best_result = results[0]
-    if (abs(best_result[3] - best_result[2]) - best_result[1] < 15 or 
+    if (abs(best_result[3] - best_result[2]) < 15 or 
         compare_shot_in_the_dark(results[1][1], 
                                  results[1][3], 
                                  results[1][2], 
@@ -997,7 +998,7 @@ def shot_in_the_dark_alignment(pysam_read,
                                  best_result[2])):
         best_result = results[1]
         best_index = 1
-    if (abs(best_result[3] - best_result[2]) - best_result[1] < 15 or 
+    if (abs(best_result[3] - best_result[2]) < 15 or 
         compare_shot_in_the_dark(results[2][1], 
                                  results[2][3], 
                                  results[2][2], 
@@ -1023,7 +1024,7 @@ def shot_in_the_dark_alignment(pysam_read,
     a.cigar = best_result[0]
     a.set_tag("ED", best_result[1])
     
-    if (ident_from_cigar(best_result[0])) < 0.6 or 15 > abs(a.reference_end - a.reference_start) - best_result[1]:
+    if (ident_from_cigar(best_result[0])) < ident_threshold or a.get_cigar_stats()[7] < 15:
         return pysam_read
     else:
         return a    
@@ -1039,6 +1040,7 @@ def align_read(
     sw_gap_extend = -1.0,
     sw_match = 3.0,
     sw_mismatch = 1.0,
+    ident_threshold = 0.75,
     secondary=False
 ):
     """Create a new alignment for a sequencing read against a tRNA reference sequence.
@@ -1202,7 +1204,7 @@ def align_read(
         # Replace with the better CIGAR from fragment alignment
         a.cigar = cigar
     
-    elif ident_from_cigar(a.cigartuples) < 0.6 or 15 > abs(a.reference_end - a.reference_start) - edit_dist:
+    elif ident_from_cigar(a.cigartuples) < ident_threshold or a.get_cigar_stats()[7] < 15:
         return pysam_read
         
     # Return the completed alignment record, ready for output to BAM/SAM
