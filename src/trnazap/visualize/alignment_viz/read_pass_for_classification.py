@@ -9,13 +9,12 @@ import numpy as np
 from numba import njit
 from importlib.resources import files
 import pickle
+import time
 
 def ref_conversion(bwa_ref, zap_ref):
     zap_seq_lookup = {}
     for seq in pysam.FastxFile(zap_ref):
         zap_seq_lookup[seq.sequence] = seq.name
-
-
         
     ref_conversion_dict = {}
     for seq in pysam.FastxFile(bwa_ref):
@@ -77,7 +76,7 @@ def positional_array(read, ref_seq, region_start, region_end):
     return track_arr
     
 @njit()
-def read_pass(track_arr, include_insertions = False, ident_threshold = 0.6, min_coverage = 10):
+def read_pass(track_arr, include_insertions = False, ident_threshold = 0.70, min_coverage = 15):
 
     total = np.count_nonzero(~np.isnan(track_arr[0]))
     if include_insertions:
@@ -122,7 +121,7 @@ def multiprocess_trna_data(args):
             assert zap_to_bwa[ref][-3:] == "1-1"
     
     with pysam.AlignmentFile(bwamem) as infile:
-        for read in tqdm(infile, position=thread_idx, leave=False):
+        for read in tqdm(infile, position=thread_idx*2, leave=True, total=None):
             if hash_first_hex(read.query_name)%threads != thread_idx:
                 continue
             if read.has_tag('pi'):
@@ -161,7 +160,8 @@ def multiprocess_trna_data(args):
     zap_tRNA_dict = {}
     zap_ident_array = defaultdict(list)
     with pysam.AlignmentFile(zap) as infile:
-        for read in tqdm(infile, position=thread_idx, leave=False):
+        time.sleep(0.01*thread_idx)
+        for read in tqdm(infile, position=thread_idx*2 + 1, leave=True, total=None):
             if hash_first_hex(read.query_name)%threads != thread_idx:
                 continue
             if read.query_name in exclusion_id_set:
