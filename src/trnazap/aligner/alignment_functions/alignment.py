@@ -1024,7 +1024,7 @@ def shot_in_the_dark_alignment(pysam_read,
     a.cigar = best_result[0]
     a.set_tag("ED", best_result[1])
     
-    if (ident_from_cigar(best_result[0])) < ident_threshold or a.get_cigar_stats()[7] < 15:
+    if (ident_from_cigar(best_result[0])) < ident_threshold or a.get_cigar_stats()[0][7] < 15:
         return pysam_read
     else:
         return a    
@@ -1204,7 +1204,7 @@ def align_read(
         # Replace with the better CIGAR from fragment alignment
         a.cigar = cigar
     
-    elif ident_from_cigar(a.cigartuples) < ident_threshold or a.get_cigar_stats()[7] < 15:
+    elif ident_from_cigar(a.cigartuples) < ident_threshold or a.get_cigar_stats()[0][7] < 15:
         return pysam_read
         
     # Return the completed alignment record, ready for output to BAM/SAM
