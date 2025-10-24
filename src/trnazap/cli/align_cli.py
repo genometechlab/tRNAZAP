@@ -3,6 +3,7 @@
 import os
 os.environ['KMP_WARNINGS'] = '0'
 os.environ['OMP_NUM_THREADS'] = '1'
+os.environ['NUMBA_THREADING_LAYER'] = 'omp'
 
 import argparse
 import sys
