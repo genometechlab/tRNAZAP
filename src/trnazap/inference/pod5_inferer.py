@@ -19,6 +19,7 @@ from ..config.model_config import ModelConfig, ModelLoader
 from ..feeders import SequenceStandardizer, load_signal, collate_fn
 from ..storages import InferenceResults, InferenceMetadata, ReadResult, ReadResultCompressed
 from ..utils import PathSet
+from ..utils import crf_smoothing
 from ..io import ZIRWriter, ZIRShardManager
 
 
@@ -37,7 +38,7 @@ class Inference(InferenceBase):
         self,
         config: Union[ModelConfig, str, Dict],
         device: Optional[torch.device] = None,
-        full_details: bool = True,
+        save_raw: bool = True,
     ) -> None:
         self.config: ModelConfig = self._load_config(config)
         if isinstance(device, str):
@@ -47,7 +48,7 @@ class Inference(InferenceBase):
         else:
             self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
             
-        self.full_details = full_details
+        self.save_raw = save_raw
 
         self.queue_size_mult = 4
         
@@ -60,7 +61,7 @@ class Inference(InferenceBase):
         output_path: Optional[Union[str, Path]] = None,
         read_ids: Optional[List[str]] = None,
         batch_size: int = 32,
-        shard_size: Optional[int] = 50000,
+        shard_size: Optional[int] = None,
         show_progress: bool = True,
         return_results: bool = True,
     ) -> Optional[InferenceResults]:
@@ -369,6 +370,8 @@ class Inference(InferenceBase):
             device_type=self.device.type, enabled=use_amp, dtype=dtype
         ):
             outputs = self.model(**inputs)
+            if not self.save_raw:
+                decoded = crf_smoothing(outputs['segmentation'], batch_t["metadata"]["num_tokens"])
 
         results = []
         for i, read_id in enumerate(batch_t["metadata"]["read_id"]):
@@ -384,8 +387,8 @@ class Inference(InferenceBase):
                 num_chunks=num_chunks,
                 chunk_size=self.config.chunk_size
             )
-            if not self.full_details:
-                result = result.to_compressed(k=3)
+            if not self.save_raw:
+                result = result.to_compressed(k=3, smoothed_preds=decoded[i])
             results.append(result)
         
         return results
