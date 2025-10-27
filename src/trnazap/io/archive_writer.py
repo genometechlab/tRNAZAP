@@ -16,7 +16,9 @@ from .archive_format import (
 )
 
 if TYPE_CHECKING:
-    from ..storages import InferenceMetadata, ReadResult
+    from ..storages import InferenceMetadata, ReadResult, ReadResultCompressed
+
+ReadResultUnion = Union["ReadResult", "ReadResultCompressed"]
 
 logger = logging.getLogger(__name__)
 
@@ -115,15 +117,20 @@ class ZIRWriter:
             self._file = None
 
     # ---------------- Public API ---------------- #
-    def add_result(self, read_result: "ReadResult") -> None:
+    def add_result(self, read_result: ReadResultUnion) -> None:
         """Append a single read result as a compressed record.
 
         Args:
-            read_result: Object with fields
+            read_result: ReadResult Object with fields
                 - read_id (str)
                 - num_chunks (int)
                 - chunk_size (int)
                 - _logits (Mapping[str, np.ndarray-like])
+                
+            OR
+            
+            read_result: ReadResultCompressed Object
+            
         """
         if self._file is None:
             raise RuntimeError("Writer not opened. Use 'with ZIRWriter(...) as w:'")
@@ -177,8 +184,8 @@ class ZIRWriter:
             f.write(b"\x00" * padding)
 
     # ---------------- Internal: Serialization ---------------- #
-    def _serialize_result(self, rr: "ReadResult") -> bytes:
-        # Validate and prepare fields
+    def _serialize_result(self, rr: ReadResultUnion) -> bytes:
+        # Validate and prepare fields common to both
         read_id = rr.read_id
         if not isinstance(read_id, str):
             raise TypeError("read_id must be str")
@@ -189,33 +196,55 @@ class ZIRWriter:
         num_chunks = int(rr.num_chunks)
         chunk_size = int(rr.chunk_size)
 
-        logits = getattr(rr, "_logits", None)
-        if logits is None:
-            logits = {}
-        if not isinstance(logits, dict):
-            # Accept Mapping-like
-            logits = dict(logits)
+        # Detect summary vs full: full has _logits; summary has top3_classes and no _logits
+        has_logits = hasattr(rr, "_logits") and getattr(rr, "_logits") is not None
+        is_summary = not has_logits  # i.e., ReadResultCompressed
 
-        n_entries = len(logits)
-        if n_entries > 255:
-            raise ValueError("At most 255 logit entries are supported")
-
-        # Build into a BytesIO (faster than repeatedly extending a bytearray for large blocks)
         buf = io.BytesIO()
 
         # read_id
         buf.write(self._S_U16.pack(len(read_id_b)))
         buf.write(read_id_b)
 
-        # basic metadata (kept signed for backward-compatibility with your reader)
+        # basic metadata
         buf.write(self._S_I32.pack(num_chunks))
         buf.write(self._S_I32.pack(chunk_size))
+
+        # record_kind
+        buf.write(struct.pack("<B", 1 if is_summary else 0))
+
+        if is_summary:
+            # ---- SUMMARY PAYLOAD (JSON blob) ----
+            # Build a compact JSON; ensure numpy types are converted
+            summary = {
+                "top3_classes": (rr.top3_classes.tolist()
+                                if hasattr(rr, "top3_classes") and isinstance(rr.top3_classes, np.ndarray)
+                                else list(rr.top3_classes) if hasattr(rr, "top3_classes") else []),
+                "variable_region_range": getattr(rr, "variable_region_range", (-1, -1)),
+                "smoothed_variable_region_range": getattr(rr, "smoothed_variable_region_range", (-1, -1)),
+                "fragmented": bool(getattr(rr, "fragmented", False)),
+            }
+            s = json.dumps(summary, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+            buf.write(self._S_U32.pack(len(s)))
+            buf.write(s)
+            return buf.getvalue()
+
+        # ---- FULL PAYLOAD (logits blocks) ----
+        logits = getattr(rr, "_logits", {})  # Mapping[str, np.ndarray-like]
+        if not isinstance(logits, dict):
+            logits = dict(logits)
+
+        n_entries = len(logits)
+        if n_entries > 255:
+            raise ValueError("At most 255 logit entries are supported")
 
         # number of logits
         buf.write(struct.pack("<B", n_entries))
 
-        # each logit block
-        for key, arr in logits.items():
+        # (Optionally) make ordering deterministic across runs:
+        for key in sorted(logits.keys()):
+            arr = logits[key]
+
             if not isinstance(key, str):
                 raise TypeError("logit key must be str")
             key_b = key.encode("utf-8")
@@ -224,19 +253,17 @@ class ZIRWriter:
 
             # Convert to float32 little-endian without unnecessary copies
             a = np.asarray(arr)
-            if a.dtype != np.dtype('<f4'):
-                a = a.astype('<f4', copy=False)   # explicit little-endian float32
+            if a.dtype != np.dtype("<f4"):
+                a = a.astype("<f4", copy=False)  # explicit little-endian float32
 
             ndim = int(a.ndim)
             if not (1 <= ndim <= 255):
                 raise ValueError(f"ndim must be in [1, 255], got {ndim}")
 
-            # shape checks
             shape = tuple(int(d) for d in a.shape)
             for d in shape:
                 if d < 0:
                     raise ValueError("negative dimensions are not allowed")
-                # 32-bit unsigned shape components
                 if d > 0xFFFFFFFF:
                     raise ValueError("dimension too large for uint32 shape")
 
@@ -249,17 +276,17 @@ class ZIRWriter:
             if ndim == 1:
                 buf.write(self._S_U32.pack(shape[0]))
             else:
-                # pack as <{ndim}I
                 buf.write(struct.pack("<" + "I" * ndim, *shape))
 
             # data (raw bytes, little-endian float32)
-            # Ensure C-contiguity for predictable frombuffer layout on read
+            # Ensure C-contiguity WITHOUT changing dtype/endian:
             if not a.flags.c_contiguous:
-                a = np.ascontiguousarray(a, dtype=np.float32)
+                a = np.ascontiguousarray(a)
             mv = memoryview(a)
-            buf.write(mv.cast("b"))  # zero-copy write when possible
+            buf.write(mv.cast("b"))
 
         return buf.getvalue()
+
 
         
 class ZIRShardManager:
@@ -350,7 +377,7 @@ class ZIRShardManager:
             # Sharding mode - create output directory
             self.output_dir.mkdir(parents=True, exist_ok=True)
     
-    def add_result(self, read_result: 'ReadResult') -> None:
+    def add_result(self, read_result: ReadResultUnion) -> None:
         """Add a result, potentially opening a new shard."""
         if self.shard_size and self.current_count >= self.shard_size:
             self._close_current_shard()

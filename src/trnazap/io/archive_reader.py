@@ -14,7 +14,7 @@ from .archive_format import MAGIC_BYTES, FORMAT_VERSION, HEADER_SIZE, RECORD_MAR
 from ..utils import search_path
 
 if TYPE_CHECKING:
-    from ..storages import InferenceMetadata, InferenceResults, ReadResult
+    from ..storages import InferenceMetadata, InferenceResults, ReadResult, ReadResultCompressed
 
 logger = logging.getLogger(__name__)
 PathLike = Union[str, Path, os.PathLike]
@@ -315,6 +315,7 @@ class ZIRReader:
                 raise ValueError(f"Corrupt record: need {sz} bytes at {at}, payload size {n}")
 
         off = 0
+        # read_id
         need(2, off)
         rid_len = self._S_U16.unpack_from(view, off)[0]
         off += 2
@@ -322,60 +323,88 @@ class ZIRReader:
         rid = data[off : off + rid_len].decode("utf-8")
         off += rid_len
 
+        # num_chunks, chunk_size
         need(8, off)
         num_chunks, chunk_size = struct.unpack_from("<ii", view, off)
         off += 8
 
+        # NEW: record_kind (0 = full/logits, 1 = summary JSON)
         need(1, off)
-        num_logits = view[off]
+        record_kind = view[off]
         off += 1
-        if num_logits > 255:
-            raise ValueError(f"num_logits out of range: {num_logits}")
 
-        logits: Dict[str, np.ndarray] = {}
-        for _ in range(num_logits):
+        if record_kind == 0:
+            # -------- FULL record (logits) --------
             need(1, off)
-            klen = view[off]
+            num_logits = view[off]
             off += 1
-            need(klen, off)
-            key = data[off : off + klen].decode("utf-8")
-            off += klen
+            if num_logits > 255:
+                raise ValueError(f"num_logits out of range: {num_logits}")
 
-            need(1, off)
-            ndim = view[off]
-            off += 1
-            if ndim == 0 or ndim > 255:
-                raise ValueError(f"Unsupported ndim={ndim}")
+            logits: Dict[str, np.ndarray] = {}
+            for _ in range(num_logits):
+                # key
+                need(1, off); klen = view[off]; off += 1
+                need(klen, off); key = data[off:off+klen].decode("utf-8"); off += klen
 
-            need(4 * ndim, off)
-            if ndim == 1:
-                dim = self._S_U32.unpack_from(view, off)[0]
-                shape = (dim,)
-                off += 4
-                total = dim
-            elif ndim == 2:
-                d0, d1 = self._S_II.unpack_from(view, off)
-                shape = (d0, d1)
-                off += 8
-                total = d0 * d1
-            else:
-                fmt = "<" + "I" * ndim
-                shape = struct.unpack_from(fmt, view, off)
-                off += 4 * ndim
-                total = int(np.prod(shape))
-                if total < 0 or total > 1_000_000_000:
-                    raise ValueError(f"Unreasonable array size ({total} elements)")
+                # ndim
+                need(1, off); ndim = view[off]; off += 1
+                if ndim == 0 or ndim > 255:
+                    raise ValueError(f"Unsupported ndim={ndim}")
 
-            bytes_needed = total * 4
-            need(bytes_needed, off)
-            arr = np.frombuffer(view, dtype="<f4", count=total, offset=off)
-            if ndim > 1:
-                arr = arr.reshape(shape)
-            logits[key] = arr
-            off += bytes_needed
+                # shape
+                need(4 * ndim, off)
+                if ndim == 1:
+                    (d0,) = struct.unpack_from("<I", view, off); off += 4
+                    shape = (d0,); total = d0
+                elif ndim == 2:
+                    d0, d1 = self._S_II.unpack_from(view, off); off += 8
+                    shape = (d0, d1); total = d0 * d1
+                else:
+                    fmt = "<" + "I" * ndim
+                    shape = struct.unpack_from(fmt, view, off); off += 4 * ndim
+                    total = int(np.prod(shape))
+                    if total < 0 or total > 1_000_000_000:
+                        raise ValueError(f"Unreasonable array size ({total} elements)")
 
-        from ..storages import ReadResult  # type: ignore
-        return ReadResult(read_id=rid, _logits=logits, num_chunks=num_chunks, chunk_size=chunk_size)
+                # data
+                bytes_needed = total * 4
+                need(bytes_needed, off)
+                arr = np.frombuffer(view, dtype="<f4", count=total, offset=off)
+                if ndim > 1:
+                    arr = arr.reshape(shape)
+                logits[key] = arr
+                off += bytes_needed
+
+            from ..storages import ReadResult  # type: ignore
+            return ReadResult(read_id=rid, _logits=logits, num_chunks=num_chunks, chunk_size=chunk_size)
+
+        elif record_kind == 1:
+            # -------- SUMMARY record (compressed) --------
+            need(4, off)
+            summary_len = self._S_U32.unpack_from(view, off)[0]
+            off += 4
+            need(summary_len, off)
+            summary = json.loads(data[off:off+summary_len].decode("utf-8"))
+            off += summary_len
+
+            from ..storages import ReadResultCompressed  # type: ignore
+            top3 = summary.get("top3_classes", [])
+            top3_np = np.asarray(top3, dtype=np.int64) if not isinstance(top3, np.ndarray) else top3
+
+            return ReadResultCompressed(
+                read_id=rid,
+                top3_classes=top3_np,
+                variable_region_range=tuple(summary.get("variable_region_range", (-1, -1))),
+                smoothed_variable_region_range=tuple(summary.get("smoothed_variable_region_range", (-1, -1))),
+                fragmented=bool(summary.get("fragmented", False)),
+                num_chunks=num_chunks,
+                chunk_size=chunk_size,
+            )
+
+        else:
+            raise ValueError(f"Unknown record_kind={record_kind}")
+
 
     def _read_header(self, f: io.BufferedReader) -> Tuple[Dict[str, Any], int]:
         magic = f.read(len(MAGIC_BYTES))
