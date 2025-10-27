@@ -12,10 +12,12 @@ import logging
 import h5py
 import json
 
-from .read_results import ReadResult
+from .read_results import ReadResult, ReadResultCompressed
 from .inference_metadata import InferenceMetadata
 from ..utils import PathSet
 from ..io import ZIRWriter, ZIRShardManager
+
+ReadResultUnion = Union["ReadResult", "ReadResultCompressed"]
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +36,7 @@ class InferenceResults:
     # Core Methods
     # -------------------------------------------------------------------------
 
-    def add_read_result(self, read_result: ReadResult) -> None:
+    def add_result(self, read_result: ReadResultUnion) -> None:
         """
         Add a ReadResult object.
 
@@ -42,26 +44,9 @@ class InferenceResults:
             read_result: ReadResult object to add
         """
         self._results[read_result.read_id] = read_result
-        self.metadata.num_reads_processed = len(self._results)
+        self.metadata.num_reads_processed = len(self._results) 
 
-    def add(self, read_id: str, logits: Dict[str, np.ndarray], num_chunks: int) -> None:
-        """
-        Add a result for a read.
-
-        Args:
-            read_id: Read identifier
-            logits: Dictionary of logit arrays
-            num_chunks: Number of chunks processed for this read
-        """
-        read_result = ReadResult(
-            read_id=read_id,
-            _logits=logits,
-            num_chunks=num_chunks,
-            chunk_size=self.metadata.chunk_size
-        )
-        self._add_result(read_result)
-
-    def get(self, read_id: str) -> Optional[ReadResult]:
+    def get(self, read_id: str) -> Optional[ReadResultUnion]:
         """
         Get result for a specific read.
 
@@ -109,7 +94,7 @@ class InferenceResults:
 
     def __iter__(self) -> Iterator[str]:
         """Iterate over read IDs."""
-        return iter(self._results)
+        return iter(self._results.values())
     
     def __bool__(self) -> bool:
         return True

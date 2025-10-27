@@ -15,6 +15,8 @@ from ..utils import search_path
 
 if TYPE_CHECKING:
     from ..storages import InferenceMetadata, InferenceResults, ReadResult, ReadResultCompressed
+    
+ReadResultUnion = Union["ReadResult", "ReadResultCompressed"]
 
 logger = logging.getLogger(__name__)
 PathLike = Union[str, Path, os.PathLike]
@@ -129,11 +131,11 @@ class ZIRReader:
     def __len__(self) -> int:
         return self.record_count
 
-    def __iter__(self) -> Generator["ReadResult", None, None]:
+    def __iter__(self) -> Generator[ReadResultUnion, None, None]:
         return self.reads()
 
     # ---------------- Public API ---------------- #
-    def reads(self, selection: Optional[Set[str]] = None) -> Generator["ReadResult", None, None]:
+    def reads(self, selection: Optional[Set[str]] = None) -> Generator[ReadResultUnion, None, None]:
         """Iterate reads; if *selection* provided, use fast path to avoid full decompress.
 
         Args:
@@ -231,7 +233,7 @@ class ZIRReader:
 
         self._index = index
 
-    def get_read(self, read_id: str) -> "ReadResult":
+    def get_read(self, read_id: str) -> ReadResultUnion:
         if self._index is None:
             self.build_index()
         assert self._index is not None
@@ -274,14 +276,14 @@ class ZIRReader:
         return InferenceMetadata(**self.metadata_dict.copy())
 
     def to_inference_results(self) -> "InferenceResults":
-        from ..storages import InferenceResults, InferenceMetadata  # type: ignore
+        from ..storages import InferenceResults, InferenceMetadata, ReadResult, ReadResultCompressed  # type: ignore
         meta = self.metadata_dict.copy()
         if meta.get("pod5_paths"):
             meta["pod5_paths"] = set(meta["pod5_paths"])  # restore set if writer serialized it
         md = InferenceMetadata(**meta)
         res = InferenceResults(metadata=md)
         for r in self.reads():
-            res._add_result(r)
+            res.add_result(r)
         return res
 
     def summary(self) -> Dict[str, Any]:
@@ -306,7 +308,7 @@ class ZIRReader:
             )
         return data
 
-    def _parse_record(self, data: bytes) -> "ReadResult":
+    def _parse_record(self, data: bytes) -> ReadResultUnion:
         view = memoryview(data)
         n = len(view)
 

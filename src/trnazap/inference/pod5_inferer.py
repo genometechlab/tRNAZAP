@@ -317,7 +317,7 @@ class Inference(InferenceBase):
                     
                     for result in batch_results:
                         if in_memory_results:
-                            in_memory_results.add_read_result(result)
+                            in_memory_results.add_result(result)
                         if zir_manager:
                             zir_manager.add_result(result)
                         if progress_bar:
