@@ -19,7 +19,6 @@ from ..config.model_config import ModelConfig, ModelLoader
 from ..feeders import SequenceStandardizer, load_signal, collate_fn
 from ..storages import InferenceResults, InferenceMetadata, ReadResult, ReadResultCompressed
 from ..utils import PathSet
-from ..utils import crf_smoothing
 from ..io import ZIRWriter, ZIRShardManager
 
 
@@ -369,9 +368,8 @@ class Inference(InferenceBase):
         with torch.no_grad(), torch.amp.autocast(
             device_type=self.device.type, enabled=use_amp, dtype=dtype
         ):
+            import time
             outputs = self.model(**inputs)
-            if not self.save_raw:
-                decoded = crf_smoothing(outputs['segmentation'], batch_t["metadata"]["num_tokens"])
 
         results = []
         for i, read_id in enumerate(batch_t["metadata"]["read_id"]):
@@ -388,7 +386,7 @@ class Inference(InferenceBase):
                 chunk_size=self.config.chunk_size
             )
             if not self.save_raw:
-                result = result.to_compressed(k=3, smoothed_preds=decoded[i])
+                result = result.to_compressed()
             results.append(result)
         
         return results

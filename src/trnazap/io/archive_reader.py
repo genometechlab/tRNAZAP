@@ -396,7 +396,6 @@ class ZIRReader:
                 read_id=rid,
                 top3_classes=top3_np,
                 variable_region_range=tuple(summary.get("variable_region_range", (-1, -1))),
-                smoothed_variable_region_range=tuple(summary.get("smoothed_variable_region_range", (-1, -1))),
                 fragmented=bool(summary.get("fragmented", False)),
                 num_chunks=num_chunks,
                 chunk_size=chunk_size,

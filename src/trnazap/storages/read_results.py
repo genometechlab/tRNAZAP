@@ -177,16 +177,18 @@ class ReadResult:
         """Apply CRF smoothing to segmentation predictions."""
         if self.segmentation_probs is not None:
             try:
-                from ..utils import crf_smoothing
-                predictions_smooth = crf_smoothing(self.segmentation_logits, lengths=[self.num_chunks], device=device)
+                from ..utils import CRFSmoother
+                smoother = CRFSmoother(num_tags=4, device=device)
+                predictions_smooth = smoother.decode(self.segmentation_logits, 
+                                                     lengths=[self.num_chunks])
                 if return_variable_region_range:
                     region = self._locate_region_of_interest(predictions_smooth, 0)
                     return predictions_smooth, region
                 return predictions_smooth
             except ImportError as e:
-                logger.warning(f"[WARNING] Failed to import crf_smoothing: {e}")
+                logger.warning(f"[Error] Failed to import crf_smoothing: {e}")
             except Exception as e:
-                logger.warning(f"[WARNING] CRF smoothing failed: {e}")
+                logger.warning(f"[Error] CRF smoothing failed: {e}")
 
     def _locate_region_of_interest(self, preds: np.ndarray, region_id: int) -> tuple:
         """Identify the start and end positions of a specific class in predictions."""
@@ -210,13 +212,7 @@ class ReadResult:
             chunk_size=self.chunk_size
         )
         
-    def to_compressed(
-        self,
-        *,
-        k: int = 3,
-        device: Union[torch.device, str] = "cpu",
-        smoothed_preds: Optional[np.ndarray] = None
-    ) -> "ReadResultCompressed":
+    def to_compressed(self) -> "ReadResultCompressed":
         """
         Convert this ReadResult into a lightweight ReadResultCompressed.
 
@@ -230,20 +226,15 @@ class ReadResult:
         """
         # --- top-k classes from classification logits ---
         if self.classification_logits is not None:
-            topk = np.argsort(self.classification_logits)[-k:][::-1].astype(int)
+            top3 = np.argsort(self.classification_logits)[-3:][::-1].astype(int)
         else:
-            topk = np.empty((0,), dtype=int)
+            top3 = np.empty((0,), dtype=int)
 
         # --- variable region from raw (argmax) segmentation ---
         if self.segmentation_logits is not None:
             variable_region = self.variable_region_range
         else:
             variable_region = (-1, -1)
-            
-        if smoothed_preds is not None:
-            smoothed_variable_region = self._locate_region_of_interest(smoothed_preds, 0)
-        else:
-            _, smoothed_variable_region = self.get_smoothed_segmentation_preds(device, True)
 
         # --- fragmentation -> boolean flag ---
         if self.fragmentation_pred is not None:
@@ -253,9 +244,8 @@ class ReadResult:
 
         return ReadResultCompressed(
             read_id=self.read_id,
-            top3_classes=topk,
+            top3_classes=top3,
             variable_region_range=variable_region,
-            smoothed_variable_region_range=smoothed_variable_region,
             fragmented=fragmented,
             num_chunks=self.num_chunks,
             chunk_size=self.chunk_size,
@@ -285,7 +275,6 @@ class ReadResultCompressed:
     read_id: str
     top3_classes: np.ndarray
     variable_region_range: Tuple
-    smoothed_variable_region_range: Tuple
     fragmented: bool
     num_chunks: int
     chunk_size: int
