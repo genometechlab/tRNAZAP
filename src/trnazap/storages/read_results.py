@@ -140,7 +140,6 @@ class ReadResult:
             return int(np.argmax(self.classification_logits))
         return None
     
-    @property
     def topk_classes(self, k: int = 3) -> Optional[List[int]]:
         """Get Top 3 prediction classes"""
         if self.classification_logits is None:
