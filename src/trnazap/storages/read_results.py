@@ -239,6 +239,11 @@ class ReadResult:
             variable_region = self.variable_region_range
         else:
             variable_region = (-1, -1)
+            
+        if smoothed_preds is not None:
+            smoothed_variable_region = self._locate_region_of_interest(smoothed_preds, 0)
+        else:
+            _, smoothed_variable_region = self.get_smoothed_segmentation_preds(device, True)
 
         # --- fragmentation -> boolean flag ---
         if self.fragmentation_pred is not None:
@@ -250,6 +255,7 @@ class ReadResult:
             read_id=self.read_id,
             top3_classes=topk,
             variable_region_range=variable_region,
+            smoothed_variable_region_range=smoothed_variable_region,
             fragmented=fragmented,
             num_chunks=self.num_chunks,
             chunk_size=self.chunk_size,
@@ -279,6 +285,7 @@ class ReadResultCompressed:
     read_id: str
     top3_classes: np.ndarray
     variable_region_range: Tuple
+    smoothed_variable_region_range: Tuple
     fragmented: bool
     num_chunks: int
     chunk_size: int
