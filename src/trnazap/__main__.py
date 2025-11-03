@@ -2,7 +2,7 @@
 
 import argparse
 import sys
-from trnazap.cli import align_cli, infer_cli, label_cli, visualize_alignment_cli, visualize_inference_cli
+from trnazap.cli import align_cli, infer_cli, infer_multi_cli, label_cli, visualize_alignment_cli, visualize_inference_cli
 
 
 def main():
@@ -31,6 +31,7 @@ def main():
     # Register each subcommand
     align_cli.register_subparser(subparsers)
     infer_cli.register_subparser(subparsers)
+    infer_multi_cli.register_subparser(subparsers)
     label_cli.register_subparser(subparsers)
     visualize_alignment_cli.register_subparser(subparsers)
     visualize_inference_cli.register_subparser(subparsers)
