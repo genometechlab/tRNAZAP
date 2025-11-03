@@ -37,7 +37,7 @@ class Inference(InferenceBase):
         self,
         config: Union[ModelConfig, str, Dict],
         device: Optional[torch.device] = None,
-        save_raw: bool = True,
+        save_raw: bool = False,
     ) -> None:
         self.config: ModelConfig = self._load_config(config)
         if isinstance(device, str):
