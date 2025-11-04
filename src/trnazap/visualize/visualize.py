@@ -11,7 +11,8 @@ from typing import Dict, Any, Optional, Tuple, Union, List
 from uuid import UUID
 
 from ..feeders import SequenceScaler
-from ..storages import ReadResult
+from ..storages import ReadResult, ReadResultCompressed
+
 
 logger = logging.getLogger(__name__)
 
@@ -88,7 +89,7 @@ class ResultsVisualizer:
         figure_size: Tuple[int, int] = (16, 8),
         title_prefix: str = "Read",
     ) -> Union[plt.Figure, List[plt.Figure]]:
-        single_input = isinstance(read_results, ReadResult)
+        single_input = isinstance(read_results, ReadResult) or isinstance(read_results, ReadResultCompressed)
         if single_input:
             read_results = [read_results]
 
@@ -114,7 +115,7 @@ class ResultsVisualizer:
 
     def _create_visualization(
         self,
-        read_result: ReadResult,
+        read_result: Union[ReadResult,ReadResultCompressed],
         signal: np.ndarray,
         apply_crf_smoothing: bool,
         plot_probabilities: bool,
@@ -123,11 +124,6 @@ class ResultsVisualizer:
         figure_size: Tuple[int, int],
         title_prefix: str,
     ) -> plt.Figure:
-        plot_segmentation = True
-        if read_result.segmentation_logits is None:
-            warnings.warn(f"No segmentation logits for read {read_result.read_id}")
-            plot_segmentation = False
-
         # Prepare data
         signal_scaled = self._prepare_signal(signal)
 
@@ -137,29 +133,51 @@ class ResultsVisualizer:
         # Signal
         if plot_signal:
             self._plot_signal(ax, signal_scaled)
+            
+        if isinstance(read_result, ReadResult):
+            plot_segmentation = True
+            if read_result.segmentation_logits is None:
+                warnings.warn(f"No segmentation logits for read {read_result.read_id}")
+                plot_segmentation = False
 
-        if plot_segmentation:
-            # Predictions
-            self._plot_predictions(ax, read_result.segmentation_preds, read_result.chunk_size,
-                                "Pred.", VIZ_PARAMS["pred_y"])
-            if apply_crf_smoothing:
-                predictions_smooth = self._apply_crf_smoothing(read_result.segmentation_logits)
-                self._plot_predictions(ax, predictions_smooth, read_result.chunk_size,
-                                    "Pred. (CRF)", VIZ_PARAMS["pred_smooth_y"])
+            if plot_segmentation:
+                # Predictions
+                self._plot_segmentations(ax, read_result.segmentation_preds, read_result.chunk_size,
+                                    "Pred.", VIZ_PARAMS["pred_y"])
+                if apply_crf_smoothing:
+                    predictions_smooth = read_result.get_smoothed_segmentation_preds(device=self.device)
+                    self._plot_segmentations(ax, predictions_smooth, read_result.chunk_size,
+                                        "Pred. (CRF)", VIZ_PARAMS["pred_smooth_y"])
 
             # Probabilities
             if plot_probabilities and read_result.segmentation_probs is not None:
                 self._plot_probabilities(ax, read_result.segmentation_probs, read_result.chunk_size)
-                
-        if ground_truth_segmentations is not None:
-            self._plot_predictions(ax, ground_truth_segmentations, read_result.chunk_size,
-                    "GT", VIZ_PARAMS["gt"])
-
+                    
+            if ground_truth_segmentations is not None:
+                self._plot_segmentations(ax, ground_truth_segmentations, read_result.chunk_size,
+                        "GT", VIZ_PARAMS["gt"])
+        
+        elif isinstance(read_result, ReadResultCompressed):
+            if apply_crf_smoothing:
+                warnings.warn("Cannot apply the CRF smoothing on ReadResultcompressed."+
+                            " Requires raw ReadResult,"+
+                            " Pass save_raw=True to inference to get raw ReadResults")
+        
+            variable_region_range = read_result.variable_region_range
+            start_ = variable_region_range[0]//read_result.chunk_size
+            end_ = ((variable_region_range[1]+1)//read_result.chunk_size)-1
+            preds_array = np.zeros((read_result.num_chunks))-1
+            preds_array[start_:end_+1]=0
+            self._plot_segmentations(ax, preds_array, read_result.chunk_size,
+                                    "Pred.", VIZ_PARAMS["pred_y"])
+            
+            
         # Format
         self._format_figure(ax, read_result.read_id, len(signal_scaled), title_prefix=title_prefix)
 
         plt.close()
         return fig
+            
 
     def _load_signals(self, read_ids: List[str]) -> Dict[str, np.ndarray]:
         if self._reader is None:
@@ -201,7 +219,7 @@ class ResultsVisualizer:
             rasterized=self.rasterize_signal,
         )
 
-    def _plot_predictions(
+    def _plot_segmentations(
         self,
         ax: plt.Axes,
         predictions: np.ndarray,
@@ -211,6 +229,7 @@ class ResultsVisualizer:
     ) -> None:
         # Draw colored blocks
         for i, pred in enumerate(predictions):
+            if pred==-1: continue
             x = i * chunk_size
             color = self.color_map.get(pred, '0.6')
             rect = Rectangle(
