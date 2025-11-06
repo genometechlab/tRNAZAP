@@ -16,7 +16,7 @@ def load_inference_obj(inference_path, pickled=False):
         
     return: A dictionary for each read in the dataset.
     """
-    from ...io import ZIRReader
+    from ...io.archive_reader_old import ZIRReaderOld
 
     if pickled:
         with open(inference_path[0], 'rb') as infile:
@@ -29,8 +29,8 @@ def load_inference_obj(inference_path, pickled=False):
     
     print(f"Loading inference from: {inference_path}")
     
-    # ZIRReader handles both single files and directories automatically!
-    with ZIRReader(inference_path, index=False) as reader:
+    # ZIRReader handles both single files and directories automatically
+    with ZIRReaderOld(inference_path, index=False) as reader:
         lbls_to_cls = reader.metadata.label_names
         inference_obj = {}
         
@@ -38,7 +38,6 @@ def load_inference_obj(inference_path, pickled=False):
             # Cache frequently used values
             probs = read_result.classification_probs
             
-            # Use argpartition instead of argsort - O(n) vs O(n log n)
             # Get indices of 3 largest values (unsorted within themselves)
             top3_indices = np.argpartition(probs, -3)[-3:]
             
