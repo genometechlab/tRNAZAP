@@ -9,6 +9,7 @@ import numpy as np
 from numba import njit
 from importlib.resources import files
 import pickle
+import json
 import time
 
 def ref_conversion(bwa_ref, zap_ref):
@@ -23,8 +24,20 @@ def ref_conversion(bwa_ref, zap_ref):
         
     return ref_conversion_dict
     
+import numpy as np
+from numba import njit
+
 def positional_array(read, ref_seq, region_start, region_end):
     """
+    Create tracking array with 4 rows: matches, insertions, coverage, deletions.
+    
+    Returns:
+    --------
+    track_arr : np.array of shape (4, length) where:
+        [0] = match counts at each position
+        [1] = insertion counts at each position
+        [2] = coverage (1 if position covered, 0 otherwise)
+        [3] = deletion counts at each position
     """
     if read.is_unmapped:
         return None, None
@@ -33,9 +46,11 @@ def positional_array(read, ref_seq, region_start, region_end):
     if read.reference_end <= region_start or read.reference_start >= region_end:
         return None, None   
 
-    track_arr = np.full((3, (region_end - region_start)), np.nan)
-    track_arr[1] = 0 #Insertion count?
-    track_arr[2] = 0 #Covered position?
+    # 4 rows now: matches, insertions, coverage, deletions
+    track_arr = np.full((4, (region_end - region_start)), np.nan)
+    track_arr[1] = 0  # Insertion count
+    track_arr[2] = 0  # Coverage
+    track_arr[3] = 0  # Deletion count
     
     # Track the most recent reference position we've seen
     last_ref_pos = None
@@ -49,7 +64,6 @@ def positional_array(read, ref_seq, region_start, region_end):
                 continue
             idx = last_ref_pos - region_start
             # Only count insertion if it's within our region
-            # Use the last reference position we saw to determine this
             if last_ref_pos is not None and region_start <= last_ref_pos < region_end:
                 track_arr[1][idx] += 1
             continue
@@ -61,7 +75,8 @@ def positional_array(read, ref_seq, region_start, region_end):
         if np.isnan(track_arr[0][idx]):
             track_arr[0][idx] = 0
             
-        if query_pos is None:  # Deletion
+        if query_pos is None:  # Deletion - bases in reference skipped by read
+            track_arr[3][idx] += 1  
             continue
         else:
             # Check if it's a match or mismatch
@@ -70,22 +85,35 @@ def positional_array(read, ref_seq, region_start, region_end):
             
             if query_base == ref_base:
                 track_arr[0][idx] += 1
-            else:
-                continue
+    
     track_arr[2] = (~np.isnan(track_arr[0])).astype(np.float64)
+    print(track_arr)
     return track_arr
     
-@njit()
-def read_pass(track_arr, include_insertions = False, ident_threshold = 0.70, min_coverage = 15):
-
+@njit
+def read_pass(track_arr, include_insertions=False, ident_threshold=0.75, min_coverage=15):
+    """
+    Determine if read passes quality thresholds.
+    Works with 4-row track_arr.
+    
+    Returns:
+    --------
+    ident : float
+        Identity score
+    passes : bool
+        Whether read passes thresholds
+    alignment_length : float
+        Number of reference positions covered
+    """
     total = np.count_nonzero(~np.isnan(track_arr[0]))
     if include_insertions:
         total += np.nansum(track_arr[1])
     matches = np.nansum(track_arr[0])
     
     ident = matches / total
+    alignment_length = np.nansum(track_arr[2])
 
-    return ident, (ident >= ident_threshold) & (np.nansum(track_arr[2]) >= min_coverage)
+    return ident, (ident >= ident_threshold) & (np.nansum(track_arr[2]) >= min_coverage), alignment_length
 
 def hash_first_hex(read_id):
     try:
@@ -95,8 +123,8 @@ def hash_first_hex(read_id):
 
 def multiprocess_trna_data(args):
     viz_path = files('trnazap').joinpath('visualize')
-    with open(str(viz_path / 'alignment_viz' / 'align_to_viz_labels.pkl'), 'rb') as infile:
-        ref_label_dict = pickle.load(infile)
+    with open(str(viz_path / 'alignment_viz' / 'align_to_viz_labels.json'), 'r') as infile:
+        ref_label_dict = json.load(infile)
     bwamem, zap, bwa_mem_ref_dict, bwa_ref_lens, zap_ref_dict, zap_ref_lens, threads, thread_idx = args
     ref_set = {'Unmapped'}
     threads=int(threads)
@@ -121,7 +149,8 @@ def multiprocess_trna_data(args):
             assert zap_to_bwa[ref][-3:] == "1-1"
     
     with pysam.AlignmentFile(bwamem) as infile:
-        for read in tqdm(infile, position=thread_idx*2, leave=True, total=None):
+        print(f"Process {thread_idx}: Parsing BWA bam")
+        for read in infile:
             if hash_first_hex(read.query_name)%threads != thread_idx:
                 continue
             if read.has_tag('pi'):
@@ -143,14 +172,16 @@ def multiprocess_trna_data(args):
             if track_arr[0] is None:
                 read_dict[read.query_name]['bwa'] = 'No tRNA'
                 continue
-                
-            ident, p = read_pass(track_arr, include_insertions=True, min_coverage = 15)
-            read_ident_dict[read.query_name] = {'bwa':ident, 'zap':None}
-            
+                        
+            ident, p, align_len = read_pass(track_arr, include_insertions=True, min_coverage = 25)
+
             if p:
+                # ONLY add to read_ident_dict if read passes
+                read_ident_dict[read.query_name] = {'bwa': ident, 'zap': None, 'bwa_len': align_len, 'zap_len': None}
+                
                 bwa_ident_array[ref_label_dict[read.reference_name]].append(ident)
                 if ref_label_dict[read.reference_name] not in bwa_tRNA_dict:
-                    bwa_tRNA_dict[ref_label_dict[read.reference_name]] = np.full((3, track_arr.shape[1]), 0)
+                    bwa_tRNA_dict[ref_label_dict[read.reference_name]] = np.full((4, track_arr.shape[1]), 0)
                 bwa_tRNA_dict[ref_label_dict[read.reference_name]] = increment_array(bwa_tRNA_dict[ref_label_dict[read.reference_name]], track_arr)
                 read_dict[read.query_name]['bwa']=ref_label_dict[read.reference_name]
             else:
@@ -158,10 +189,11 @@ def multiprocess_trna_data(args):
     
     #This is for the zap
     zap_tRNA_dict = {}
+    print(f"Process {thread_idx}: Parsing Zap Bam")
     zap_ident_array = defaultdict(list)
     with pysam.AlignmentFile(zap) as infile:
         time.sleep(0.01*thread_idx)
-        for read in tqdm(infile, position=thread_idx*2 + 1, leave=True, total=None):
+        for read in infile:
             if hash_first_hex(read.query_name)%threads != thread_idx:
                 continue
             if read.query_name in exclusion_id_set:
@@ -183,16 +215,19 @@ def multiprocess_trna_data(args):
                 read_dict[read.query_name]['zap_to_bwa'] = 'Unmapped'
                 continue
                 
-            ident, p = read_pass(track_arr, include_insertions=True, min_coverage = 15)
-                
-            if read.query_name not in read_ident_dict:
-                read_ident_dict[read.query_name] = {'bwa':None, 'zap':ident}
-            else:
-                read_ident_dict[read.query_name]['zap'] = ident
+            ident, p, align_len = read_pass(track_arr, include_insertions=True, min_coverage = 25)
+
             if p:
+                # ONLY add to read_ident_dict if read passes
+                if read.query_name not in read_ident_dict:
+                    read_ident_dict[read.query_name] = {'bwa': None, 'zap': ident, 'bwa_len': None, 'zap_len': align_len}
+                else:
+                    read_ident_dict[read.query_name]['zap'] = ident
+                    read_ident_dict[read.query_name]['zap_len'] = align_len
+                
                 zap_ident_array[ref_label_dict[read.reference_name]].append(ident)
                 if ref_label_dict[read.reference_name] not in zap_tRNA_dict:
-                    zap_tRNA_dict[ref_label_dict[read.reference_name]] = np.full((3, track_arr.shape[1]), 0)
+                    zap_tRNA_dict[ref_label_dict[read.reference_name]] = np.full((4, track_arr.shape[1]), 0)
                 zap_tRNA_dict[ref_label_dict[read.reference_name]] = increment_array(zap_tRNA_dict[ref_label_dict[read.reference_name]], track_arr)
                 read_dict[read.query_name]['zap'] = ref_label_dict[read.reference_name]
                 read_dict[read.query_name]['zap_to_bwa'] = zap_to_bwa[ref_label_dict[read.reference_name]]
@@ -254,9 +289,12 @@ def merge_multiprocess(outputs):
 
     return ref_set, total_read_dict, bwa_ident_dict, zap_ident_dict, bwa_position_ident_dict, zap_position_ident_dict, read_ident_dict, exclusion_read_ids
 
-#@njit(fastmath = True) 
 @njit
 def increment_array(template_arr, new_arr):
+    """
+    Increment template array with new array values.
+    Works with 4-row arrays.
+    """
     for i in range(new_arr.shape[0]):
         for j in range(new_arr.shape[1]):
             if np.isnan(new_arr[i, j]):

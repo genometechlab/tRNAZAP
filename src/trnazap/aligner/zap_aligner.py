@@ -1,4 +1,5 @@
 import os
+os.environ['OMP_DISPLAY_ENV'] = 'FALSE'
 os.environ['KMP_WARNINGS'] = '0'
 os.environ['OMP_NUM_THREADS'] = '1'
 

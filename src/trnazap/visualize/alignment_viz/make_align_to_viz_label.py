@@ -1,4 +1,4 @@
-import pickle
+import json
 if __name__ == "__main__":
     align_to_viz_label = {
         "Escherichia_coli_str_K-12_substr_MG1655_tRNA-Ala-GGC-1-1": "tRNA-Ala-GGC-1-1",
@@ -156,8 +156,8 @@ if __name__ == "__main__":
         "Saccharomyces_cerevisiae_mito_TyrGTA": "mito_Tyr-GTA",
         "Saccharomyces_cerevisiae_mito_ValTAC": "mito_Val-TAC",
     }
-    with open("align_to_viz_labels.pkl", "wb") as outfile:
-        pickle.dump(align_to_viz_label, outfile)
+    with open("align_to_viz_labels.json", "w") as outfile:
+        json.dump(align_to_viz_label, outfile, indent=4)
 
 ecoli_sort_order = [
     "tRNA-Ala-GGC-1-1",
@@ -295,8 +295,8 @@ yeast_sort_order = [
     "mito_Val-TAC",
     'Unmapped']
 
-with open('ecoli_label_sort_order.pkl', 'wb') as outfile:
-    pickle.dump(ecoli_sort_order, outfile)
+with open('ecoli_label_sort_order.json', 'w') as outfile:
+    json.dump(ecoli_sort_order, outfile, indent = 4)
 
-with open('yeast_label_sort_order.pkl', 'wb') as outfile:
-    pickle.dump(yeast_sort_order, outfile)
+with open('yeast_label_sort_order.json', 'w') as outfile:
+    json.dump(yeast_sort_order, outfile, indent = 4)

@@ -220,13 +220,14 @@ def zap_label(bam, ref, out, decoder_dict):
         ref_lens[tRNA.name] = len(tRNA.sequence)
         ref_seqs[tRNA.name] = tRNA.sequence
         tRNA_labels[tRNA.name] = i + 3
-
+        
     with open(decoder_dict, 'rb') as infile:
         decoder_dict = pickle.load(infile)
 
     out_dict = {}
     for read in tqdm(af.fetch()):
 
+            
         if read.is_unmapped or read.mapping_quality == 0 or read.is_secondary or read.is_supplementary or read.has_tag('pi') or read.get_tag('ns') >= 1000000:
             continue
 
@@ -243,6 +244,7 @@ def zap_label(bam, ref, out, decoder_dict):
             fragment = True
 
         matches, mismatches, insertions, deletions = check_identity(read, ref_seqs[read.reference_name], read.reference_start, read.reference_end)
+
         if matches / (matches + mismatches + insertions + deletions) < 0.75:
             continue
 

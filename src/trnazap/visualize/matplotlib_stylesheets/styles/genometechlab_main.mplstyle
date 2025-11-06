@@ -1,0 +1,352 @@
+# Genometech Lab Comprehensive Master Style Sheet
+# ================================================
+# This style sheet uses Helvetica Bold for titles and regular Helvetica for everything else
+
+# =============================================================================
+# PDF BACKEND CONFIGURATION
+# =============================================================================
+pdf.fonttype : 42          # TrueType fonts (instead of Type 3)
+ps.fonttype  : 42          # TrueType fonts for PostScript too
+
+# =============================================================================
+# FONT CONFIGURATION
+# =============================================================================
+# Main font settings - using regular Helvetica
+font.family          : sans-serif
+font.sans-serif      : Helvetica
+font.size            : 12.0
+font.style           : normal
+font.variant         : normal
+font.weight          : normal
+font.stretch         : normal
+
+# Text rendering
+text.usetex          : False
+text.antialiased     : True
+text.color           : black
+
+# Math text settings
+mathtext.fontset     : custom
+mathtext.rm          : Helvetica
+mathtext.it          : Helvetica:italic
+mathtext.bf          : Helvetica:bold
+mathtext.cal         : cursive
+mathtext.tt          : monospace
+mathtext.sf          : Helvetica
+mathtext.default     : it
+
+# =============================================================================
+# AXES CONFIGURATION
+# =============================================================================
+# Axes appearance
+axes.facecolor       : none
+axes.edgecolor       : black
+axes.linewidth       : 0.8
+axes.grid            : False
+axes.grid.axis       : both
+axes.grid.which      : major
+axes.axisbelow       : True
+axes.unicode_minus   : True
+
+# Axes labels
+axes.labelsize       : 14
+axes.labelweight     : normal
+axes.labelcolor      : black
+axes.labelpad        : 4.0
+
+# Axes titles
+axes.titlesize       : 16
+axes.titleweight     : bold      # Can toggle between bold or normal
+axes.titlepad        : 4.0
+axes.titlelocation   : center
+axes.titley          : None      # None means auto
+
+# Spine configuration (removing top and right spines for cleaner look)
+axes.spines.left     : True
+axes.spines.bottom   : True
+axes.spines.top      : False
+axes.spines.right    : False
+
+# Axes limits and margins
+axes.xmargin         : 0.05
+axes.ymargin         : 0.05
+axes.zmargin         : 0.05
+axes.autolimit_mode  : data
+
+# Color cycle - colorblind-friendly palette
+axes.prop_cycle      : cycler('color', ['332288', '117733', '44AA99', '88CCEE', 'DDCC77', 'CC6677', 'AA4499', '882255'])
+
+# =============================================================================
+# FIGURE CONFIGURATION
+# =============================================================================
+# Figure size and resolution
+figure.figsize       : 3.25, 2.25
+figure.dpi           : 600
+figure.facecolor     : none
+figure.edgecolor     : none
+figure.frameon       : False
+figure.autolayout    : False
+
+# Figure title
+figure.titlesize     : 16
+figure.titleweight   : bold
+
+# Subplot parameters
+figure.subplot.left   : 0.125
+figure.subplot.right  : 0.9
+figure.subplot.bottom : 0.11
+figure.subplot.top    : 0.88
+figure.subplot.wspace : 0.2
+figure.subplot.hspace : 0.2
+
+# Constrained layout settings
+figure.constrained_layout.use : True
+figure.constrained_layout.h_pad : 0.04167
+figure.constrained_layout.w_pad : 0.04167
+figure.constrained_layout.hspace : 0.02
+figure.constrained_layout.wspace : 0.02
+
+# =============================================================================
+# SAVING FIGURES
+# =============================================================================
+savefig.dpi          : 600
+savefig.facecolor    : none
+savefig.edgecolor    : none
+savefig.format       : pdf
+savefig.bbox         : tight
+savefig.pad_inches   : 0.05
+savefig.transparent  : True
+savefig.orientation  : portrait
+
+# =============================================================================
+# TICKS CONFIGURATION
+# =============================================================================
+# X-axis ticks
+xtick.top            : False
+xtick.bottom         : True
+xtick.labeltop       : False
+xtick.labelbottom    : True
+xtick.major.size     : 4.0
+xtick.minor.size     : 0
+xtick.major.width    : 0.8
+xtick.minor.width    : 0
+xtick.major.pad      : 4.0
+xtick.minor.pad      : 0
+xtick.color          : black
+xtick.labelsize      : 12
+xtick.direction      : out
+xtick.minor.visible  : False
+xtick.major.top      : False
+xtick.major.bottom   : True
+xtick.minor.top      : False
+xtick.minor.bottom   : False
+xtick.alignment      : center
+
+# Y-axis ticks
+ytick.left           : True
+ytick.right          : False
+ytick.labelleft      : True
+ytick.labelright     : False
+ytick.major.size     : 4.0
+ytick.minor.size     : 0
+ytick.major.width    : 0.8
+ytick.minor.width    : 0
+ytick.major.pad      : 4.0
+ytick.minor.pad      : 0
+ytick.color          : black
+ytick.labelsize      : 12
+ytick.direction      : out
+ytick.minor.visible  : False
+ytick.major.left     : True
+ytick.major.right    : False
+ytick.minor.left     : False
+ytick.minor.right    : False
+ytick.alignment      : center_baseline
+
+# =============================================================================
+# GRID CONFIGURATION
+# =============================================================================
+grid.color           : white
+grid.linestyle       : --
+grid.linewidth       : 0.5
+grid.alpha           : 0.3
+
+# =============================================================================
+# LEGEND CONFIGURATION
+# =============================================================================
+legend.loc           : best
+legend.frameon       : True
+legend.framealpha    : 0.9
+legend.facecolor     : white
+legend.edgecolor     : black
+legend.fancybox      : False
+legend.shadow        : False
+legend.numpoints     : 1
+legend.scatterpoints : 1
+legend.markerscale   : 1.0
+legend.fontsize      : 12
+legend.title_fontsize : 14
+legend.borderpad     : 0.4
+legend.columnspacing : 2.0
+legend.labelspacing  : 0.5
+legend.handlelength  : 1.5
+legend.handleheight  : 0.7
+legend.handletextpad : 0.5
+legend.borderaxespad : 0.5
+
+# =============================================================================
+# LINES CONFIGURATION
+# =============================================================================
+lines.linewidth      : 1.5
+lines.linestyle      : -
+lines.color          : C0
+lines.marker         : None
+lines.markerfacecolor : auto
+lines.markeredgecolor : auto
+lines.markeredgewidth : 0.8
+lines.markersize     : 6
+lines.dash_joinstyle : round
+lines.dash_capstyle  : butt
+lines.solid_joinstyle : round
+lines.solid_capstyle : projecting
+lines.antialiased    : True
+lines.dashed_pattern : 3.7, 1.6
+lines.dashdot_pattern : 6.4, 1.6, 1, 1.6
+lines.dotted_pattern : 1, 1.65
+lines.scale_dashes   : True
+
+# =============================================================================
+# PATCHES CONFIGURATION
+# =============================================================================
+patch.linewidth      : 0.8
+patch.facecolor      : C0
+patch.edgecolor      : black
+patch.force_edgecolor : False
+patch.antialiased    : True
+
+# =============================================================================
+# HATCHES
+# =============================================================================
+hatch.color          : black
+hatch.linewidth      : 0.8
+
+# =============================================================================
+# HISTOGRAM CONFIGURATION
+# =============================================================================
+hist.bins            : auto
+
+# =============================================================================
+# BOXPLOT CONFIGURATION
+# =============================================================================
+boxplot.notch        : False
+boxplot.vertical     : True
+boxplot.whiskers     : 1.5
+boxplot.bootstrap    : None
+boxplot.patchartist  : False
+boxplot.showmeans    : False
+boxplot.showcaps     : True
+boxplot.showbox      : True
+boxplot.showfliers   : True
+boxplot.meanline     : False
+
+boxplot.flierprops.color : black
+boxplot.flierprops.marker : o
+boxplot.flierprops.markerfacecolor : none
+boxplot.flierprops.markeredgecolor : black
+boxplot.flierprops.markeredgewidth : 0.8
+boxplot.flierprops.markersize : 6
+boxplot.flierprops.linestyle : none
+boxplot.flierprops.linewidth : 0.8
+
+boxplot.boxprops.color : black
+boxplot.boxprops.linewidth : 0.8
+boxplot.boxprops.linestyle : -
+
+boxplot.whiskerprops.color : black
+boxplot.whiskerprops.linewidth : 0.8
+boxplot.whiskerprops.linestyle : -
+
+boxplot.capprops.color : black
+boxplot.capprops.linewidth : 0.8
+boxplot.capprops.linestyle : -
+
+boxplot.medianprops.color : C1
+boxplot.medianprops.linewidth : 1.0
+boxplot.medianprops.linestyle : -
+
+boxplot.meanprops.color : C2
+boxplot.meanprops.marker : ^
+boxplot.meanprops.markerfacecolor : C2
+boxplot.meanprops.markeredgecolor : C2
+boxplot.meanprops.markersize : 6
+boxplot.meanprops.linestyle : none
+boxplot.meanprops.linewidth : 0.8
+
+# =============================================================================
+# ERROR BAR CONFIGURATION
+# =============================================================================
+errorbar.capsize     : 3
+
+# =============================================================================
+# IMAGE CONFIGURATION
+# =============================================================================
+image.aspect         : equal
+image.interpolation  : antialiased
+image.cmap           : viridis
+image.lut            : 256
+image.origin         : upper
+image.resample       : True
+image.composite_image : True
+
+# =============================================================================
+# CONTOUR PLOTS
+# =============================================================================
+contour.negative_linestyle : dashed
+contour.corner_mask : True
+contour.linewidth : None
+
+# =============================================================================
+# SCATTER PLOTS
+# =============================================================================
+scatter.marker : o
+scatter.edgecolors : face
+
+# =============================================================================
+# DATE FORMATTING
+# =============================================================================
+date.autoformatter.year : %Y
+date.autoformatter.month : %Y-%m
+date.autoformatter.day : %Y-%m-%d
+date.autoformatter.hour : %m-%d %H
+date.autoformatter.minute : %d %H:%M
+date.autoformatter.second : %H:%M:%S
+date.autoformatter.microsecond : %M:%S.%f
+
+# =============================================================================
+# POLARAXES CONFIGURATION
+# =============================================================================
+polaraxes.grid : True
+
+# =============================================================================
+# 3D AXES CONFIGURATION
+# =============================================================================
+axes3d.grid : True
+
+# =============================================================================
+# KEYMAP CONFIGURATION (interactive controls)
+# =============================================================================
+keymap.fullscreen : f, ctrl+f
+keymap.home : h, r, home
+keymap.back : left, c, backspace, MouseButton.BACK
+keymap.forward : right, v, MouseButton.FORWARD
+keymap.pan : p
+keymap.zoom : o
+keymap.save : s, ctrl+s
+keymap.quit : ctrl+w, cmd+w, q
+keymap.quit_all : 
+keymap.grid : g
+keymap.grid_minor : G
+keymap.yscale : l
+keymap.xscale : k, L
+keymap.help : f1
+keymap.copy : ctrl+c, cmd+c
