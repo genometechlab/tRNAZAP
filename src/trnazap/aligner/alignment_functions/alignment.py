@@ -503,7 +503,7 @@ def smith_waterman_for_fragment(tRNA, fragment, gap_open = -6, gap_extend = -1, 
     #gap_extend = -1     # Penalty for extending an existing gap (lower)
     #match_score = +3    # Reward for matching bases
     #mismatch_score = -1 # Penalty for mismatched bases
-    min_matches = 15 #Only consider scores for regions with 15 matches
+    min_matches = 25 #Only consider scores for regions with 25 matches
     
     # Get sequence lengths
     tRNA_len = len(tRNA)
@@ -741,7 +741,7 @@ def fragment_align(sub_sequence,
     )
     
     # Step 2: Quality control - filter out poor alignments
-    # The length_mat tracks number of matches, requiring at least 10 matches
+    # The length_mat tracks number of matches, requiring at least 25 matches
     # helps avoid reporting spurious short alignments that occur by chance
 
     # Check if any position met the minimum match requirement
@@ -749,7 +749,7 @@ def fragment_align(sub_sequence,
         # No position had >= min_matches
         return None, None, None, None, None, None
     
-    if length_mat[tRNA_start, frag_start] < 10:
+    if length_mat[tRNA_start, frag_start] < 25:
         # Return None for all values to indicate alignment failure
         return None, None, None, None, None, None
     
@@ -989,7 +989,7 @@ def shot_in_the_dark_alignment(pysam_read,
     
     best_index = 0
     best_result = results[0]
-    if (abs(best_result[3] - best_result[2]) < 15 or 
+    if (abs(best_result[3] - best_result[2]) < 25 or 
         compare_shot_in_the_dark(results[1][1], 
                                  results[1][3], 
                                  results[1][2], 
@@ -998,7 +998,7 @@ def shot_in_the_dark_alignment(pysam_read,
                                  best_result[2])):
         best_result = results[1]
         best_index = 1
-    if (abs(best_result[3] - best_result[2]) < 15 or 
+    if (abs(best_result[3] - best_result[2]) < 25 or 
         compare_shot_in_the_dark(results[2][1], 
                                  results[2][3], 
                                  results[2][2], 
@@ -1024,7 +1024,7 @@ def shot_in_the_dark_alignment(pysam_read,
     a.cigar = best_result[0]
     a.set_tag("ED", best_result[1])
     
-    if (ident_from_cigar(best_result[0])) < ident_threshold or a.get_cigar_stats()[0][7] < 15:
+    if (ident_from_cigar(best_result[0])) < ident_threshold or a.get_cigar_stats()[0][7] < 25:
         return pysam_read
     else:
         return a    
@@ -1204,7 +1204,7 @@ def align_read(
         # Replace with the better CIGAR from fragment alignment
         a.cigar = cigar
     
-    elif ident_from_cigar(a.cigartuples) < ident_threshold or a.get_cigar_stats()[0][7] < 15:
+    elif ident_from_cigar(a.cigartuples) < ident_threshold or a.get_cigar_stats()[0][7] < 25:
         return pysam_read
         
     # Return the completed alignment record, ready for output to BAM/SAM

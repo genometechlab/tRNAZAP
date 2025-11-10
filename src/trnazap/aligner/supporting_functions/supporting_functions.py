@@ -2,7 +2,6 @@
 
 This module focuses on tRNA alignment.
 """
-##TODO: I need to update it so we're not splitting reads anymore. Use the HASH!
 import os
 import pickle
 import subprocess
@@ -220,7 +219,7 @@ def secondary_better(primary_read, secondary_read, min_ident_improvement):
     secondary_identity = (secondary_ref_len) / (secondary_ref_len + secondary_read.get_tag('ED'))
     secondary_matches = secondary_read.get_cigar_stats()[0][7]
 
-    if secondary_matches >= 15 and primary_matches < 15:
+    if secondary_matches >= 25 and primary_matches < 25:
         return True
 
     return (secondary_identity - min_ident_improvement) > primary_identity
@@ -318,15 +317,6 @@ def make_sub_bam(args_list):
             # 2. Are in our target read ID set (additional filtering criterion)
 
             if read.has_tag('pi'):
-                '''
-                pi = read.get_tag('pi')
-                if pi not in counted_pi_reads and int(pi[:8], 16) % threads == sub_index and pi in inference_dict:
-                    counted_pi_reads.add(pi)
-                    reads_processed += 1
-                    if reads_processed % 100 == 0:
-                        if progress is not None:
-                            increment_counter(monitor, 100)
-                '''
                 continue
         
             if int(read.query_name[:8], 16) % threads != sub_index:
