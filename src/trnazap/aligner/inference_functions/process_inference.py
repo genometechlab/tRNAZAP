@@ -16,7 +16,8 @@ def load_inference_obj(inference_path, pickled=False):
         
     return: A dictionary for each read in the dataset.
     """
-    from ...io.archive_reader_old import ZIRReaderOld
+    from ...io import ZIRReader
+    from ...storages import ReadResult, ReadResultCompressed
 
     if pickled:
         with open(inference_path[0], 'rb') as infile:
@@ -30,92 +31,59 @@ def load_inference_obj(inference_path, pickled=False):
     print(f"Loading inference from: {inference_path}")
     
     # ZIRReader handles both single files and directories automatically
-    with ZIRReaderOld(inference_path, index=False) as reader:
+    with ZIRReader(inference_path, index=False) as reader:
         lbls_to_cls = reader.metadata.label_names
         inference_obj = {}
         
         for read_result in tqdm(reader, total=len(reader), desc="Processing reads"):
-            # Cache frequently used values
-            probs = read_result.classification_probs
-            
-            # Get indices of 3 largest values (unsorted within themselves)
-            top3_indices = np.argpartition(probs, -3)[-3:]
-            
-            # Sort only these 3 indices by their probability values
-            top3_sorted = top3_indices[np.argsort(probs[top3_indices])][::-1]
-            
-            # Convert to strings once
-            pred_str = str(read_result.classification_pred)
-            secondary_str = str(top3_sorted[1])
-            tertiary_str = str(top3_sorted[2])
-            
-            # Lookup labels
-            cls_ = lbls_to_cls[pred_str]
-            secondary_cls = lbls_to_cls[secondary_str]
-            tertiary_cls = lbls_to_cls[tertiary_str]
+            if isinstance(read_result, ReadResultCompressed):
+                # Compressed record - use top3_classes directly
+                top3_sorted = read_result.top3_classes  # np.ndarray with top 3 class indices
+                
+                # Convert to strings for label lookup
+                pred_str = str(top3_sorted[0])
+                secondary_str = str(top3_sorted[1])
+                tertiary_str = str(top3_sorted[2])
+                
+                # Lookup labels
+                cls_ = lbls_to_cls[pred_str]
+                secondary_cls = lbls_to_cls[secondary_str]
+                tertiary_cls = lbls_to_cls[tertiary_str]
+                
+                # Use fragmented field
+                fragment_str = str(read_result.fragmented)
+                
+            else:  # isinstance(read_result, ReadResult)
+                # Full ReadResult - compute from classification_probs
+                probs = read_result.classification_probs
+                
+                # Get indices of 3 largest values (unsorted within themselves)
+                top3_indices = np.argpartition(probs, -3)[-3:]
+                
+                # Sort only these 3 indices by their probability values
+                top3_sorted = top3_indices[np.argsort(probs[top3_indices])][::-1]
+                
+                # Convert to strings once
+                pred_str = str(top3_sorted[0])
+                secondary_str = str(top3_sorted[1])
+                tertiary_str = str(top3_sorted[2])
+                
+                # Lookup labels
+                cls_ = lbls_to_cls[pred_str]
+                secondary_cls = lbls_to_cls[secondary_str]
+                tertiary_cls = lbls_to_cls[tertiary_str]
+                
+                # Use fragmentation_pred
+                fragment_str = str(read_result.fragmentation_pred)
             
             inference_obj[read_result.read_id] = (
                 cls_,
                 read_result.variable_region_range,
                 secondary_cls,
                 tertiary_cls,
-                str(read_result.fragmentation_pred)
+                fragment_str
             )
     
-    return inference_obj
-
-def tmp_load_inference_obj(inference_path):
-    """
-    Read in the pickled inference object(s).
-
-    params:
-        inference_path: Either a dir with .zir files or a single .zir file
-        
-    return: A dictionary for each read in the dataset.
-    """
-
-    if os.path.isdir(inference_path[0]):
-        return from_dir(inference_path[0])
-    else:
-        return from_files(inference_path)
-
-def from_files(inference_path_list):
-    from ...storages import InferenceResults
-    from ...io import ZIRReader
-    inference_obj={}
-    for pth in inference_path_list:
-        print(f"Loading Single File: {pth}")
-        with ZIRReader(pth, index=False) as zip_reader:
-            lbls_to_cls = zip_reader.metadata.label_names
-            for read_result in zip_reader:
-                variable_region = read_result.variable_region_range
-                cls_ = lbls_to_cls[str(read_result.classification_pred)]
-                sorted_classes = np.argsort(read_result.classification_probs)
-                secondary_cls = lbls_to_cls[str(sorted_classes[-2])]
-                tertiary_cls = lbls_to_cls[str(sorted_classes[-3])]
-                fragment = str(read_result.fragmentation_pred)
-                inference_obj[read_result.read_id] = (cls_, variable_region, secondary_cls, tertiary_cls, fragment)
-    return inference_obj
-
-def from_dir(dir_path):
-    from ...storages import InferenceResults
-    from ...io import ZIRReader
-    files = [f for f in os.listdir(dir_path) if f[-4:] == ".zir"]
-    print(f"Loading inference files in: {dir_path}")
-    inference_obj = {}
-    for i, pth in tqdm(enumerate(files)):
-        pth = os.path.join(dir_path, pth)
-        print(pth)
-        with ZIRReader(pth, index=False) as zip_reader:
-            lbls_to_cls = zip_reader.metadata.label_names
-            for read_result in zip_reader:
-                variable_region = read_result.variable_region_range
-                cls_ = lbls_to_cls[str(read_result.classification_pred)]
-                sorted_classes = np.argsort(read_result.classification_probs)
-                secondary_cls = lbls_to_cls[str(sorted_classes[-2])]
-                tertiary_cls = lbls_to_cls[str(sorted_classes[-3])]
-                fragment = str(read_result.fragmentation_pred)
-                inference_obj[read_result.read_id] = (cls_, variable_region, secondary_cls, tertiary_cls, fragment)
     return inference_obj
 
 if __name__ == "__main__":
