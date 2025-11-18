@@ -49,7 +49,7 @@ class InferenceBase(ABC):
         self.model_loader = ModelLoader(self.config, self.device)
         self.model = self.model_loader.get_model(load_checkpoint=True).eval()
 
-    def _process_record(self, rec: pod5.Record) -> Dict:
+    def _process_record(self, rec: pod5.ReadRecord) -> Dict:
         """Return a single pre-processed sample dict for one read."""
         dtype = np.float64 if self.config.float_dtype == "float64" else np.float32
         sig = rec.signal.astype(dtype)
