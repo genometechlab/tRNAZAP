@@ -331,7 +331,7 @@ class ResultsVisualizer:
 
     def _add_legend(self, ax: plt.Axes) -> None:
         handles = [
-            Rectangle((0, 0), 1, 1, fc=color, label=self.class_labels[idx])
+            Rectangle((0, 0), 1, 1, fc=color, label=self.class_labels[idx], clip_on=False)
             for idx, color in self.color_map.items()
         ]
         handles.append(plt.Line2D([0], [0], color='black', linewidth=1.4, label='Signal'))

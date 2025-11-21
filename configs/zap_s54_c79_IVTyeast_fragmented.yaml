@@ -96,6 +96,3 @@ label_names:
  76: 'Saccharomyces_cerevisiae_mito_TrpTCA_modomics'
  77: 'Saccharomyces_cerevisiae_mito_TyrGTA_modomics'
  78: 'Saccharomyces_cerevisiae_mito_ValTAC_tRNAscan'
- 48: 'Escherichia_coli_str_K-12_substr_MG1655_tRNA-Val-TAC-1-1'
- 49: 'Escherichia_coli_str_K-12_substr_MG1655_tRNA-fMet-CAT-1-1'
- 50: 'Escherichia_coli_str_K-12_substr_MG1655_tRNA-fMet-CAT-2-1'
