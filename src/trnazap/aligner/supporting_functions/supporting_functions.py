@@ -10,7 +10,7 @@ from importlib.resources import files
 import pysam
 from tqdm import tqdm
 
-from ...aligner.alignment_functions.alignment import align_read, shot_in_the_dark_alignment
+from ...aligner.alignment_functions.alignment import align_read, shot_in_the_dark_alignment, ident_from_cigar
 from ...aligner.progress_monitoring.progress import increment_counter
 
 from pathlib import Path
@@ -210,14 +210,22 @@ def secondary_better(primary_read, secondary_read, min_ident_improvement):
         return False
     if primary_read.is_unmapped and not secondary_read.is_unmapped:
         return True
-        
+
     primary_ref_len = primary_read.reference_end - primary_read.reference_start
-    primary_identity = (primary_ref_len) / (primary_ref_len + primary_read.get_tag('ED'))
     primary_matches = primary_read.get_cigar_stats()[0][7]
+    if primary_matches < 25:
+        primary_identity = 0
+    else:
+        primary_identity = ident_from_cigar(primary_read.cigartuples)
+
 
     secondary_ref_len = secondary_read.reference_end - secondary_read.reference_start
-    secondary_identity = (secondary_ref_len) / (secondary_ref_len + secondary_read.get_tag('ED'))
     secondary_matches = secondary_read.get_cigar_stats()[0][7]
+    if secondary_matches < 25:
+        secondary_identity = 0
+    else:
+        secondary_identity = ident_from_cigar(secondary_read.cigartuples)
+
 
     if secondary_matches >= 25 and primary_matches < 25:
         return True

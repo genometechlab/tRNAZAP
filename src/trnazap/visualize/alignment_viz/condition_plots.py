@@ -157,7 +157,63 @@ def plot_identity_distribution(data_dict, condition_label, ident_threshold,
     
     return np.array(all_identities)
 
-
+def plot_read_count_comparison_bars_tpm(dict_a, label_a, dict_b, label_b, model,
+                                        out_dir=None, out_prefix=''):
+    """
+    Side-by-side bar plot for ALL tRNAs using TPM normalization.
+    """
+    if not dict_a or not dict_b:
+        print(f"Insufficient data for comparison, skipping plot.")
+        return pd.DataFrame()
+    
+    # Load sort order
+    sort_order = load_sort_order(model)
+    
+    # Calculate total reads for TPM normalization
+    total_a = sum(len(data['track_arrs']) for data in dict_a.values())
+    total_b = sum(len(data['track_arrs']) for data in dict_b.values())
+    
+    # Get all tRNA names
+    all_trnas = set(dict_a.keys()) | set(dict_b.keys())
+    
+    # Prepare data
+    rows = []
+    for trna in all_trnas:
+        count_a = len(dict_a[trna]['track_arrs']) if trna in dict_a else 0
+        count_b = len(dict_b[trna]['track_arrs']) if trna in dict_b else 0
+        
+        # Calculate TPM
+        tpm_a = (count_a / total_a) * 1e6
+        tpm_b = (count_b / total_b) * 1e6
+        
+        rows.append({'tRNA': trna, 'Condition': label_a, 'TPM': tpm_a})
+        rows.append({'tRNA': trna, 'Condition': label_b, 'TPM': tpm_b})
+    
+    df = pd.DataFrame(rows)
+    df = apply_sort_order(df, sort_order, 'tRNA')
+    
+    # Dynamic figure width
+    n_trnas = len(all_trnas)
+    fig_width = max(14, n_trnas * 0.3)
+    
+    # Plot
+    fig, ax = plt.subplots(figsize=(fig_width, 6))
+    sns.barplot(data=df, x='tRNA', y='TPM', hue='Condition', ax=ax)
+    ax.set_xlabel('tRNA', fontsize=12)
+    ax.set_ylabel('TPM (Transcripts Per Million)', fontsize=12)
+    ax.set_title(f'TPM Comparison: {label_a} vs {label_b}', 
+                 fontsize=14, fontweight='bold')
+    plt.xticks(rotation=90, ha='right')
+    plt.legend(title='Condition')
+    plt.tight_layout()
+    
+    if out_dir:
+        save_path = os.path.join(out_dir, f'{out_prefix}read_count_comparison_bars_tpm.pdf')
+        fig.get_figure().savefig(save_path, dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    return df
+    
 def plot_per_trna_identity_boxen(data_dict, condition_label, model, ident_threshold,
                                  out_dir=None, out_prefix=''):
     """

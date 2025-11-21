@@ -29,6 +29,7 @@ from .condition_plots import (
     plot_identity_comparison_boxen,
     plot_delta_read_percentage,
     plot_read_count_comparison_bars,
+    plot_read_count_comparison_bars_tpm,
     plot_read_count_scatter_tpm,
     plot_delta_tpm_absolute,
     plot_delta_tpm_log2fc,
@@ -414,6 +415,14 @@ def compare_conditions(condition_a_dict, condition_a_label,
         condition_b_dict, condition_b_label,
         model, out_dir, out_prefix
     )
+
+    # 2b. Side-by-side tpm comparison
+    print("Generating: Side-by-side TPM comparison...")
+    results['tpm_comparison'] = plot_read_count_comparison_bars_tpm(
+        condition_a_dict, condition_a_label,
+        condition_b_dict, condition_b_label,
+        model, out_dir, out_prefix
+    )
     
     # 3. TPM scatter plot
     print("Generating: TPM scatter plot...")
@@ -482,6 +491,7 @@ def compare_conditions(condition_a_dict, condition_a_label,
     print(f"{'='*60}\n")
     
     return results
+
 
 
 

@@ -120,28 +120,6 @@ def run_align(
         files = p.map(make_sub_bam, p_list)
 
     print("Finished Aligning")
-    # Update counter to complete the progress bar
-    #current_count = get_counter_value(monitor_counter.name)
-    #missing = len(inference_dict) - current_count  # You'll need to have total_work defined
-    
-    #if missing > 0:
-    #    print(f"Updating counter with {missing} missing reads")
-    #    increment_counter(monitor_counter.name, missing)
-        
-        # Give monitor thread time to see the update and reach 100%
-    #    time.sleep(0.2)
-    #elif missing < 0:
-    #    print(f"WARNING: Counter exceeded expected by {-missing}")
-    
-    # Now check and stop the monitor
-    #monitor.join(timeout=5)
-
-    #if monitor.is_alive():
-    #    print("WARNING: Monitor thread still running!")
-    #monitor_counter.close()
-    #monitor_counter.unlink()
-    
-    print(files)
 
     sort_p_list = make_sort_params_list(
         files, 

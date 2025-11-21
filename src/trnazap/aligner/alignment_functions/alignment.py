@@ -213,84 +213,6 @@ def compute_edit_operations_affine(s: str, t: str, gap_open = 2, gap_extend = 0.
         idx -= 1
 
     return instr_array[idx + 1 :], start, stop   
-'''        
-def compute_edit_operations(s: str, t: str):
-    """
-    Compute the edit operations required to transform s (query) into t (reference).
-
-    This function traces back through the alignment matrix to determine the
-    specific sequence of operations (match, substitution, insertion, deletion)
-    needed to transform the query into the reference. It leverages the truncated
-    alignment to focus on the best matching region.
-
-    Args:
-        s: Query sequence (observed tRNA)
-        t: Reference sequence (tRNA template)
-
-    Returns:
-        tuple: A tuple containing:
-            - ndarray: Array of integer codes representing operations (ASCII values)
-            - int: Starting position in the query
-            - int: Ending position in the query
-
-    Notes:
-        The operation codes are ASCII values:
-        - 'm' (109): Match
-        - 's' (115): Substitution
-        - 'i' (105): Insertion
-        - 'd' (100): Deletion
-    """
-    # Get the distance matrix and truncate it
-    full_matrix = wagner_fisher_affine(s, t)
-    d, start, stop = wagner_fisher_truncated(full_matrix)
-
-    # We're Going to try a full truncation
-
-    # Get dimensions of the truncated matrix
-    m, n = d.shape[0] - 1, d.shape[1] - 1
-
-    # Pre-allocate array with maximum possible size (m+n)
-    max_operations = m + n
-    instr_array = np.zeros(max_operations, dtype=np.int8)
-
-    # Initialize index for filling the array (from the end)
-    idx = max_operations - 1
-
-    # Trace back through the matrix
-    while n > 0:
-        # For each position, evaluate all three possible previous moves
-        # and choose the one that led to the current cell with minimum cost
-        deletion_score = d[m - 1, n] if m >= 1 else np.inf
-        insertion_score = d[m, n - 1] if n >= 1 else np.inf
-        sub_or_match_score = d[m - 1, n - 1] if m >= 1 and n >= 1 else np.inf
-
-        # Diagonal move: check if it's a match or substitution
-        if (
-            sub_or_match_score <= deletion_score
-            and sub_or_match_score <= insertion_score
-        ):
-            if d[m - 1, n - 1] < d[m, n]:
-                instr_array[idx] = ord("s")  # Substitution (mismatch)
-            else:
-                instr_array[idx] = ord("m")  # Match (identical bases)
-            m -= 1
-            n -= 1
-        # Horizontal move: corresponds to deletion in reference frame
-        elif insertion_score <= deletion_score:
-            # Note: "deletion" here is relative to transforming query → reference
-            # In alignment terms, this is an insertion into the query
-            instr_array[idx] = ord("d")  # Deletion
-            n -= 1
-        # Vertical move: corresponds to insertion in reference frame
-        else:
-            # In alignment terms, this is a deletion from the query
-            instr_array[idx] = ord("i")  # Insertion
-            m -= 1
-
-        idx -= 1
-
-    return instr_array[idx + 1 :], start, stop
-'''
 
 def edit_instructions(s: str, t: str, wf_gap_open = 2.0, wf_gap_extend = 0.5,):
     """
@@ -780,12 +702,125 @@ def fragment_align(sub_sequence,
         numeric_code=True   # Return numeric CIGAR codes instead of letters
     )
     
-    # Step 5: Return all alignment information
-    # Remember the coordinate naming confusion:
-    # - tRNA_start, frag_start: Where alignment ENDS (highest score position)
-    # - tRNA_end, frag_end: Where alignment STARTS (traceback end position)
-    # This is backwards from intuition but consistent with the implementation
-    return cigar, edit_dist, tRNA_start, tRNA_end, frag_start, frag_end
+    cigar, ref_shift, edit_offset = trim_cigar_to_first_match_window(
+        cigar, 
+        window_size=8, 
+        min_matches=6
+    )
+    
+    # Adjust edit distance and reference position based on trimming
+    edit_dist = edit_dist - edit_offset
+    tRNA_end_adjusted = tRNA_end + ref_shift
+    
+    return cigar, edit_dist, tRNA_start, tRNA_end_adjusted, frag_start, frag_end
+
+@njit(cache=True, fastmath=True)
+def find_first_match_in_window(expanded, start_offset, window_size, min_matches):
+    """Find the index of the first '=' in the first window with >= min_matches.
+    
+    Returns -1 if no good window found.
+    """
+    total_length = len(expanded)
+    
+    for i in range(start_offset, total_length - window_size + 1):
+        # Count matches in window
+        match_count = 0
+        
+        for j in range(window_size):
+            if expanded[i + j] == 7:  # Match
+                match_count += 1
+        
+        if match_count >= min_matches:
+            # Found good window, now find first '=' within it
+            for j in range(window_size):
+                if expanded[i + j] == 7:
+                    return i + j
+    
+    return -1
+
+def trim_cigar_to_first_match_window(cigar_tuples, window_size=8, min_matches=6):
+    """Fast trimming that finds first window with min_matches '=' ops, then trims to first '=' in that window.
+    
+    Args:
+        cigar_tuples: List of (operation, length) tuples (pysam format)
+        window_size: Size of sliding window (default 8)
+        min_matches: Minimum number of '=' ops required in window (default 6)
+    
+    Returns:
+        tuple: (trimmed_cigar, ref_start_shift, total_changes_to_soft)
+    """
+    if not cigar_tuples:
+        return cigar_tuples, 0, 0
+    
+    # Check for leading soft clip and skip past it
+    start_offset = 0
+    if cigar_tuples[0][0] == 4:  # Leading soft clip
+        start_offset = cigar_tuples[0][1]
+    
+    # Expand CIGAR once (as numpy array for numba)
+    total_length = sum(length for _, length in cigar_tuples)
+    expanded = np.empty(total_length, dtype=np.uint8)
+    pos = 0
+    for op, length in cigar_tuples:
+        expanded[pos:pos+length] = op
+        pos += length
+    
+    if total_length - start_offset < window_size:
+        return [], 0, 0
+    
+    # Use numba to find first match index
+    first_match_idx = find_first_match_in_window(expanded, start_offset, window_size, min_matches)
+    
+    if first_match_idx == -1:
+        return [], 0, 0
+    
+    # Count what we're trimming (everything before first_match_idx)
+    delta_ref_start = 0
+    soft_clip_bases = 0
+    delta_edit_dist = 0
+    
+    for i in range(first_match_idx):
+        op = expanded[i]
+        if op == 2:  # Deletion - consumes reference
+            delta_ref_start += 1
+            delta_edit_dist +=1
+        elif op == 8:  # Mismatch - consumes both
+            delta_ref_start += 1
+            soft_clip_bases += 1
+            delta_edit_dist += 1
+        elif op == 1: #Insertion
+            delta_edit_dist += 1
+            soft_clip_bases += 1
+        elif op == 4: #Soft Clip
+            soft_clip_bases += 1
+        elif op == 7: #Match
+            soft_clip_bases += 1
+            delta_ref_start += 1
+    
+    
+    # Build new CIGAR starting from first_match_idx
+    result = []
+    
+    # Add soft clip for everything we trimmed
+    if soft_clip_bases > 0:
+        result.append((4, soft_clip_bases))
+    
+    # Compress remaining operations back into CIGAR tuples
+    current_op = int(expanded[first_match_idx])
+    current_count = 1
+    
+    for i in range(first_match_idx + 1, total_length):
+        if expanded[i] == current_op:
+            current_count += 1
+        else:
+            result.append((current_op, current_count))
+            current_op = int(expanded[i])
+            current_count = 1
+    
+    # Don't forget the last operation
+    result.append((current_op, current_count))
+    
+    return result, delta_ref_start, delta_edit_dist
 
 def trim_cigar_to_matches(cigar_tuples):
     """Trim CIGAR to start and end with matches.
@@ -965,7 +1000,7 @@ def shot_in_the_dark_alignment(pysam_read,
     # This will be 0, 1, 2 based on the order of classification
     pre_results = [fragment_align(pysam_read.query_sequence, 
                                   top_three_ref_dict[i][1], 
-                                  0 , 
+                                  0, 
                                   0, 
                                   sw_gap_open, 
                                   sw_gap_extend, 
@@ -973,17 +1008,11 @@ def shot_in_the_dark_alignment(pysam_read,
                                   sw_mismatch) for i in range(3)]
     results = []
     for pr in pre_results:
-        if pr[0] is None:  # Skip failed alignments
+        if pr[0] is None or len(pr[0])==0:  # Skip failed alignments
             results.append((None, float('inf'), 0, 0, 0, 0))
             continue
-        updated_cigar, start_off_set, edit_delta = trim_cigar_to_matches(pr[0])
-        five_shift, three_shift = frag_update(pr[0][0], pr[0][-1], updated_cigar[0], updated_cigar[-1])
-        results.append((updated_cigar, 
-                        pr[1] - edit_delta, 
-                        pr[3] + start_off_set,
-                        pr[2] - (edit_delta - start_off_set),
-                        pr[4] + five_shift,
-                        pr[5] + three_shift))                      
+
+        results.append(pr)                      
     #Each element of results contains the following:
         # (cigar, edit_dist, tRNA_start, tRNA_end, frag_start, frag_end)
     
@@ -1020,7 +1049,7 @@ def shot_in_the_dark_alignment(pysam_read,
     a.tags = pysam_read.get_tags()                     # Preserve any custom tags (RG, BC, etc.)
     a.mapping_quality = 3 - best_index
     a.set_tag('ls', best_index)
-    a.reference_start = best_result[2]
+    a.reference_start = best_result[3]
     a.cigar = best_result[0]
     a.set_tag("ED", best_result[1])
     
@@ -1187,10 +1216,6 @@ def align_read(
             edit_dist > (ref_start-ref_stop) * 0.3
            ):
             return pysam_read
-        
-        cigar, ref_shift, edit_offset = trim_cigar_to_matches(cigar)
-        edit_dist = edit_dist - edit_offset
-        ref_stop += ref_shift
         
         # If fragment alignment succeeded and is better than our original alignment
         # (lower edit distance = better alignment), use it instead
