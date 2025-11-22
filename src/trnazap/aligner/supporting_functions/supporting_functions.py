@@ -226,7 +226,6 @@ def secondary_better(primary_read, secondary_read, min_ident_improvement):
     else:
         secondary_identity = ident_from_cigar(secondary_read.cigartuples)
 
-
     if secondary_matches >= 25 and primary_matches < 25:
         return True
 

@@ -648,7 +648,7 @@ def fragment_align(sub_sequence,
         indicate where we END the traceback (which is the START of the alignment).
         This is counterintuitive but maintained for consistency with the underlying functions.
     """
-    
+
     # Step 1: Perform Smith-Waterman local alignment
     # This builds three matrices: scores, traceback operations, and match counts
     # IMPORTANT: tRNA_start and frag_start represent the HIGHEST SCORING position,
@@ -701,7 +701,7 @@ def fragment_align(sub_sequence,
         three_clip,         # Bases clipped from 3' end (will add S operation to CIGAR)
         numeric_code=True   # Return numeric CIGAR codes instead of letters
     )
-    
+
     cigar, ref_shift, edit_offset = trim_cigar_to_first_match_window(
         cigar, 
         window_size=8, 
@@ -1176,31 +1176,31 @@ def align_read(
     # CIGAR strings encode alignments compactly: M=match/mismatch, I=insertion, D=deletion, S=soft clip
     # The soft clipping (S operations) indicates bases present in the read but not part of alignment
     cigar, edit_dist = cigar_tuples_from_edit_instrucitons(
-        edit_instruction_list,              # The alignment operations to encode
-        query_start=max(0, start),          # Convert to 0-based coordinates (alignment uses 1-based)
-        five_clip=five_slice,               # Bases before tRNA to soft-clip (5' end)
-        query_end=len(sub_sequence) - stop, # Calculate bases after alignment to soft-clip
-        three_clip=max(0, three_slice),     # Bases after tRNA to soft-clip (3' end)
+        edit_instruction_list,
+        query_start=max(0, start),
+        five_clip=five_slice,
+        query_end=len(sub_sequence) - stop,
+        three_clip=max(0, three_slice),
     )
 
-    trimmed_cigar, ref_off_set, edit_delta = trim_cigar_to_matches(cigar)
+    # Use the new fast window-based trimming for ALL alignments
+    trimmed_cigar, ref_off_set, edit_delta = trim_cigar_to_first_match_window(
+        cigar,
+        window_size=8,
+        min_matches=6
+    )
+    
     edit_dist = edit_dist - edit_delta
     a.cigar = trimmed_cigar
     a.reference_start += ref_off_set
-    # Store the edit distance as a custom SAM tag
-    # Edit distance = number of mismatches + number of indels in the alignment
-    # This is a standard metric for alignment quality (lower is better)
     a.set_tag("ED", edit_dist)
 
-    if a.reference_length is None: # What does this do? Impossible for no positions to align... Consider removing for now...
+    if a.reference_length is None:
         return pysam_read
         
-    # Fragment alignment check - this is a fallback strategy
-    # Some tRNA sequences might only partially overlap with the reference
-    # (e.g., if the read contains a tRNA fragment rather than complete tRNA)
+    # Fragment alignment fallback stays the same
     if check_fragment(a.cigar, len(ref_sequence)):
-        # Try a more permissive fragment-based alignment approach
-        # This might find a better local alignment for partial sequences
+        # fragment_align already does its own trimming internally
         cigar, edit_dist, ref_start, ref_stop, query_start, query_stop = fragment_align(
             sub_sequence, 
             ref_sequence, 
@@ -1212,25 +1212,15 @@ def align_read(
             sw_mismatch,
         )
         
-        if (cigar is None or 
-            edit_dist > (ref_start-ref_stop) * 0.3
-           ):
+        if (cigar is None or edit_dist > (ref_start - ref_stop) * 0.3):
             return pysam_read
         
-        # If fragment alignment succeeded and is better than our original alignment
-        # (lower edit distance = better alignment), use it instead
-        # Mark this as a fragment alignment with a custom tag
         a.set_tag("FG", 1)
         a.set_tag("ED", edit_dist)
-        # IMPORTANT: ref_stop here is actually where the alignment STARTS
-        # This is due to the traceback perspective in the fragment_align function
-        # where 'stop' means where we stop tracing back (= start of alignment)
         a.reference_start = ref_stop
-        # Replace with the better CIGAR from fragment alignment
         a.cigar = cigar
     
     elif ident_from_cigar(a.cigartuples) < ident_threshold or a.get_cigar_stats()[0][7] < 25:
         return pysam_read
         
-    # Return the completed alignment record, ready for output to BAM/SAM
     return a
