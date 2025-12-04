@@ -12,7 +12,7 @@ import time
 import numba
 numba.set_num_threads(1)
 
-from .supporting_functions.supporting_functions import get_model_to_ref, process_ref, make_parameter_list, make_sort_params_list, split_read_ids, make_sub_bam, sort_bam, merge_bam
+from .supporting_functions.supporting_functions import get_model_to_ref, process_ref, make_parameter_list, make_sort_params_list, make_sub_bam, sort_bam, merge_bam
 from .inference_functions.process_inference import load_inference_obj
 from .progress_monitoring.progress import create_shared_counter, create_monitor, get_counter_value, increment_counter
 
@@ -64,6 +64,11 @@ def run_align(
 
     program_name = "tRNA_zap"
     version = "05_16_25_v0.1.2"
+
+    #If out dir directory does not exist, will try and create.
+    if not os.path.isdir(outdir):
+        os.makdirs(outdir)
+    
     # Identifying the appropriate reference based on the model selected
     model_to_ref = get_model_to_ref()
 
@@ -74,7 +79,7 @@ def run_align(
     except Exception as e:
         print(f"{e}\n")
         print(
-            f"{model} is not recognized, please choose from human-mt,"
+            f"{model} is not recognized, please choose from"
             + " yeast, and e_coli."
         )
         return None
@@ -88,24 +93,17 @@ def run_align(
     # Inference dict includes information for each read about the highest probablity
     # class, the indicies for tRNA in signal space, and if this is a training or
     # validation dataset it adds a ground truth label ('gt').
-    inference_dict = load_inference_obj(inference_list, pickled)
-
-    #splt_reads = split_read_ids(inference_dict, threads)
-
-    #monitor_counter = create_shared_counter()
-    #monitor = create_monitor(monitor_counter.name, len(inference_dict))
-    #monitor.start()
+    #inference_dict = load_inference_obj(inference_list, pickled)
     
     p_list = make_parameter_list(
         threads,
         bam_header,
-        inference_dict,
+        inference_list,
         ref_dict,
         unaligned_bam,
         out_dir,
         out_pre,
         secondary,
-        #monitor_counter.name,
         None,
         ident_threshold,
         wf_gap_open, 

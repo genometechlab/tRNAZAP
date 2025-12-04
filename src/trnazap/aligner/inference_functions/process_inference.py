@@ -8,7 +8,7 @@ import sys
 
 #TODO: Fix the logic for loading files
 
-def load_inference_obj(inference_path, pickled=False):
+def load_inference_obj(inference_path, threads=1, thread_index=0, pickled=False):
     """
     Read in the pickled inference object(s).
     params:
@@ -36,6 +36,8 @@ def load_inference_obj(inference_path, pickled=False):
         inference_obj = {}
         
         for read_result in tqdm(reader, total=len(reader), desc="Processing reads"):
+            if int(read_result.read_id[:8], 16) % threads != thread_index:
+                continue
             if isinstance(read_result, ReadResultCompressed):
                 # Compressed record - use top3_classes directly
                 top3_sorted = read_result.top3_classes  # np.ndarray with top 3 class indices

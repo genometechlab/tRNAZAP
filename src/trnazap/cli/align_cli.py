@@ -16,7 +16,6 @@ from ..aligner.supporting_functions.supporting_functions import (
     make_parameter_list,
     make_sub_bam,
     process_ref,
-    split_read_ids,
     get_model_to_ref,
     make_sort_params_list,
     sort_bam,

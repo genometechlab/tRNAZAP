@@ -9,11 +9,12 @@ import itertools
 from importlib.resources import files
 import pysam
 from tqdm import tqdm
+from pathlib import Path
 
 from ...aligner.alignment_functions.alignment import align_read, shot_in_the_dark_alignment, ident_from_cigar
 from ...aligner.progress_monitoring.progress import increment_counter
+from ...aligner.inference_functions.process_inference import load_inference_obj
 
-from pathlib import Path
 
 
 def get_model_to_ref():
@@ -66,24 +67,6 @@ def process_ref(ref_path, program_info):
         #ref_dict[i] = {"reference_name": seq.name, "reference_seq": seq.sequence}
         ref_dict[seq.name] = {'reference_index': i, 'reference_seq':seq.sequence}
     return bam_header, ref_dict
-
-def split_read_ids(inference_dict, threads):
-    """
-    Split read_ids into subsets.
-
-    params:
-        inference_dict: path to bam file to iterate through (str)
-        threads: count of pools to split reads into (int)
-
-    return: A list of sets, with each set containing read_ids
-    """
-    total = len(inference_dict)
-    chunk_size = total // threads
-    remainder = total % threads
-    
-    key_iter = iter(inference_dict)
-    sizes = [chunk_size + (1 if i < remainder else 0) for i in range(threads)]
-    return [set(itertools.islice(key_iter, size)) for size in sizes]
 
 def make_parameter_list(
     threads,
@@ -281,7 +264,7 @@ def make_sub_bam(args_list):
         threads,  # Set of read IDs we want to include in output
         sub_index,    # This subprocess index for hashing reads
         header_dict,  # BAM header structure for output file
-        inference_dict,  # Model predictions mapping read_id -> tRNA classification
+        inference_dict_path,  # Model predictions mapping read_id -> tRNA classification
         ref_dict,  # Reference sequences mapping ref_id -> sequence data
         unaligned_bam_path,  # Input BAM file with unaligned reads
         outpath,
@@ -294,17 +277,24 @@ def make_sub_bam(args_list):
         sw_gap_extend,
         sw_match,
         sw_mismatch
-    ) = args_list  # Output path for the new aligned BAM file
+    ) = args_list  
+        
     progress = monitor
+
+    #Load the inference dict using the read_id_hash
+    inference_dict = load_inference_obj(inference_dict_path, threads=threads, thread_index=sub_index)
+    
     # Open the unaligned BAM file for reading
     # check_sq=False allows reading BAM files without proper SQ (sequence) headers
     # This is common for unaligned BAM files that may not have reference info
     ua_bam = pysam.AlignmentFile(unaligned_bam_path, check_sq=False)
-
+    
     #Count worker reads processed for shared progress monitoring
     reads_processed = 0
     pi_reads = 0
     seen_reads = 0
+
+    
     
     # Create the output BAM file with proper header information
     # Using context manager ensures file is properly closed even if errors occur
@@ -396,6 +386,10 @@ def make_sub_bam(args_list):
             # Handle unmapped reads - write them as-is without further processing
             # These are reads where the alignment algorithm couldn't find a good match
             if aligned_read.is_unmapped:
+                if not allow_secondary:
+                    outf.write(aligned_read)
+                    continue
+                    
                 i_dict = inference_dict[read.query_name]
                 top_three_ref_dict = {
                     #ref_index, ref_sequence
