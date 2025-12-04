@@ -66,8 +66,8 @@ def run_align(
     version = "05_16_25_v0.1.2"
 
     #If out dir directory does not exist, will try and create.
-    if not os.path.isdir(outdir):
-        os.makdirs(outdir)
+    if not os.path.isdir(out_dir):
+        os.makdirs(out_dir)
     
     # Identifying the appropriate reference based on the model selected
     model_to_ref = get_model_to_ref()
