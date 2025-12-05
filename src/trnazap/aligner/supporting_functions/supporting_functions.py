@@ -305,9 +305,10 @@ def make_sub_bam(args_list):
         for read in tqdm(
             ua_bam.fetch(until_eof=True),
             desc=f"Process reads that hash to {sub_index}", 
-            position=sub_index,
-            leave=True,
-            total=len(inference_dict)
+            #position=sub_index,
+            disable=(sub_index != threads - 1)
+            leave=False,
+            total=len(inference_dict)*threads
         ):
             # Filter reads: only process those that meet both criteria:
             # 1. Have inference predictions (model classified them as tRNA)

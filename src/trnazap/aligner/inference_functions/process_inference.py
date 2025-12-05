@@ -35,7 +35,10 @@ def load_inference_obj(inference_path, threads=1, thread_index=0, pickled=False)
         lbls_to_cls = reader.metadata.label_names
         inference_obj = {}
         
-        for read_result in tqdm(reader, total=len(reader), desc="Processing reads"):
+        for read_result in tqdm(reader, 
+                                total=len(reader),
+                                disable = (threads - 1 != thread_index),
+                                desc="Processing reads"):
             if int(read_result.read_id[:8], 16) % threads != thread_index:
                 continue
             if isinstance(read_result, ReadResultCompressed):
