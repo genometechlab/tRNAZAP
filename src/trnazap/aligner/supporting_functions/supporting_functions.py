@@ -306,7 +306,7 @@ def make_sub_bam(args_list):
             ua_bam.fetch(until_eof=True),
             desc=f"Process reads that hash to {sub_index}", 
             #position=sub_index,
-            disable=(sub_index != threads - 1)
+            disable=(sub_index != threads - 1),
             leave=False,
             total=len(inference_dict)*threads
         ):
