@@ -27,8 +27,9 @@ def load_inference_obj(inference_path, threads=1, thread_index=0, pickled=False)
     if isinstance(inference_path, (list, tuple)):
         if len(inference_path) == 1:
             inference_path = inference_path[0]
-    
-    print(f"Loading inference from: {inference_path}")
+
+    if int(read_result.read_id[:8], 16) % threads == thread_index:
+        print(f"Loading inference from: {inference_path}")
     
     # ZIRReader handles both single files and directories automatically
     with ZIRReader(inference_path, index=False) as reader:
@@ -38,6 +39,7 @@ def load_inference_obj(inference_path, threads=1, thread_index=0, pickled=False)
         for read_result in tqdm(reader, 
                                 total=len(reader),
                                 disable = (threads - 1 != thread_index),
+                                leave=False,
                                 desc="Processing reads"):
             if int(read_result.read_id[:8], 16) % threads != thread_index:
                 continue

@@ -326,6 +326,8 @@ def make_sub_bam(args_list):
             inference = read.query_name in inference_dict
             
             if inference:
+                if read.has_tag('RG'):
+                    read.set_tag('RG', None)
                 i_dict = inference_dict[read.query_name]
                 
                 # Extract the predicted reference sequence information
