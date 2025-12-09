@@ -121,6 +121,7 @@ def register_subparser(subparsers):
 
     parser.add_argument(
         "--ident_threshold",
+        type=float,
         default=0.75,
         required=False,
         help="Minimum identity threshold for reads to be considered"
@@ -243,6 +244,7 @@ if __name__ == "__main__":
     
     parser.add_argument(
         "--ident_threshold",
+        type=float,
         default=0.75,
         required=False,
         help="Minimum identity threshold for reads to be considered"
