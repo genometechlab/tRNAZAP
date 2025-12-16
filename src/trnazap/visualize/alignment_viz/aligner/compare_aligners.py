@@ -27,7 +27,7 @@ from .comparison_plots import (
 )
 
 
-def load_references(model):
+def load_references(model, reference=None):
     """
     Load BWA and Zap reference sequences from package based on model.
     
@@ -41,6 +41,7 @@ def load_references(model):
     tuple of (bwa_ref_path, zap_ref_path, bwa_ref_dict, bwa_ref_lens, 
               zap_ref_dict, zap_ref_lens, ref_label_dict)
     """
+
     refs = files('trnazap').joinpath('references')
     
     if model == 'e_coli':
@@ -56,15 +57,24 @@ def load_references(model):
     viz_path = files('trnazap').joinpath('visualize')
     with open(str(viz_path / 'alignment_viz' / 'align_to_viz_labels.json'), 'r') as infile:
         ref_label_dict = json.load(infile)
-    
-    # Load BWA references
-    bwa_ref_dict = {}
-    bwa_ref_lens = {}
-    for seq in pysam.FastxFile(bwa_ref):
-        label = ref_label_dict[seq.name]
-        bwa_ref_dict[label] = seq.sequence
-        bwa_ref_lens[label] = len(seq.sequence)
-    
+
+    if reference is None:
+        # Load BWA references
+        bwa_ref_dict = {}
+        bwa_ref_lens = {}
+        for seq in pysam.FastxFile(bwa_ref):
+            label = ref_label_dict[seq.name]
+            bwa_ref_dict[label] = seq.sequence
+            bwa_ref_lens[label] = len(seq.sequence)
+    else:
+        # Load BWA references with custom reference path
+        bwa_ref_dict = {}
+        bwa_ref_lens = {}
+        for seq in pysam.FastxFile(reference):
+            label = ref_label_dict[seq.name]
+            bwa_ref_dict[label] = seq.sequence
+            bwa_ref_lens[label] = len(seq.sequence)
+            
     # Load Zap references
     zap_ref_dict = {}
     zap_ref_lens = {}
@@ -94,6 +104,7 @@ def print_alignment_summary(bwa_data, zap_data, comparison_data):
 
 
 def generate_aligner_comparison_figures(
+        reference,
         bwa_bam,
         zap_bam,
         model,
@@ -194,12 +205,14 @@ def generate_aligner_comparison_figures(
     print("="*70)
     t0 = time()
     bwa_ref_path, zap_ref_path, bwa_ref_dict, bwa_ref_lens, zap_ref_dict, zap_ref_lens, ref_label_dict = \
-        load_references(model)
+        load_references(model, reference)
     print(f"  BWA reference: {os.path.basename(bwa_ref_path)}")
     print(f"  Zap reference: {os.path.basename(zap_ref_path)}")
     print(f"  Loaded {len(bwa_ref_dict)} BWA references")
     print(f"  Loaded {len(zap_ref_dict)} Zap references")
     print(f"  Time: {(time() - t0):.2f} seconds")
+
+    print(bwa_ref_dict)
     
     # Load BWA alignments
     print("\n" + "="*70)

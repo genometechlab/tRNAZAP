@@ -1,7 +1,7 @@
 # src/trnazap/cli/visualize_cli.py
 
 """Visualize subcommand for trnazap."""
-#from ..visualize.alignment_viz.comparison_figures import create_figures
+from ..visualize.alignment_viz.aligner.compare_aligners import generate_aligner_comparison_figures
 from importlib.resources import files
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -50,6 +50,10 @@ def register_subparser(subparsers):
                         default=None,
                         help="Existing zap alignment")
 
+    parser.add_argument("--reference",
+                        default=None,
+                        help="If a non-standard bwa reference has been used, pass it here. This is not a suggested parameter, it will likely break the script")
+
 
     parser.set_defaults(func=run_alignment_visualize)  
 
@@ -65,18 +69,16 @@ def run_alignment_visualize(args):
     if args.model == 'yeast':
         bwa_ref = str(refs / 'bwa_align_references' / 'sacCer3-mature-tRNAs_bwa_subset_biosplints.fa')
         zap_ref = str(refs / 'zap_align_references' / 'sacCer3-mature-tRNAs_zap_ref.fa')
-
-    fig,ax = plt.subplots(1)
-    sns.lineplot([0, 5, 7.5, 6, 22.43, 11])
-    fig.get_figure().savefig("/Volumes/T7/test_fig.png")
     
-    create_figures(
-        bwa_ref=bwa_ref,
-        zap_ref=zap_ref,
+    generate_aligner_comparison_figures(
+        #bwa_ref=bwa_ref,
+        #zap_ref=zap_ref,
+        reference=args.reference,
+        model=args.model,
         bwa_bam=args.bwa_path,
         zap_bam=args.zap_path,
-        threads=args.threads,
-        out_pre=args.out_prefix,
+        threads=int(args.threads),
+        out_prefix=args.out_prefix,
         out_dir=args.out_dir)
         
                    

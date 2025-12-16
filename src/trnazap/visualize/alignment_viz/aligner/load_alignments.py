@@ -133,6 +133,9 @@ def _process_chunk(args):
             
             # Get tRNA name
             trna_name = ref_label_dict[read.reference_name]
+
+            if trna_name not in ref_lens:
+                continue
             
             # Prepare aligned_pairs as numpy array with -1 for None
             aligned_pairs = np.array(
