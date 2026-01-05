@@ -53,6 +53,11 @@ class SingleReadInference(InferenceBase):
         pod5_paths: Union[PathLike, PathLikeList],
         read_id: str,
         return_attention_scores: bool = False,
+        return_token_saliency: bool = False,
+        saliency_target_class: Optional[int] = None,
+        saliency_use_abs: Optional[bool] = False,
+        saliency_reduce: Optional[str] = 'l2',
+        saliency_normalize: Optional[bool] = False,
     ) -> Optional[InferenceResults]:
         
         pod5_pathset: PathSet = self._resolve_paths(pod5_paths)
@@ -91,11 +96,24 @@ class SingleReadInference(InferenceBase):
             chunk_size=self.config.chunk_size
         )
         
+        aux_out = dict()
+        
         if return_attention_scores and hasattr(self.model, 'get_cls_attention'):
             cls_scores, cls_attn, cls_attn_mean = self.model.get_cls_attention(**inputs, average_heads=True)
             cls_scores = cls_scores.cpu().numpy()[0]
             cls_attn = cls_attn.cpu().numpy()[0]
             cls_attn_mean = cls_attn_mean.cpu().numpy()[0]
-            return result, (cls_scores, cls_attn, cls_attn_mean)
-        else:
-            return result
+            aux_out["attention"] = (cls_scores, cls_attn, cls_attn_mean)
+            
+        if return_token_saliency and hasattr(self.model, 'get_token_saliency'):
+            sal, chosen = self.model.get_token_saliency(**inputs, 
+                                                        target_class=saliency_target_class, 
+                                                        use_abs = saliency_use_abs,
+                                                        reduce=saliency_reduce,
+                                                        normalize=saliency_normalize)
+            sal = sal.cpu().numpy()[0]
+            chosen = chosen.cpu().numpy()[0]
+            aux_out["saliency"] = (sal, chosen)
+            
+        if aux_out: return result, aux_out
+        else: result
