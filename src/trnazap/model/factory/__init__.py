@@ -1,2 +1,2 @@
-from .transformer_encoder import TransformerEncoderWrapper
+from .transformer_encoder import *
 from .positional_encodings import *

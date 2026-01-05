@@ -1,5 +1,6 @@
 from .transformer_multitask_zam import TransformerZAM_multitask
 from .transformer_multitask_zam_frag import TransformerZAM_multitask_wfrag
 from .transformer_multitask_zam_clsonly import TransformerZAM_multitask_CLSOnly
+from .zap_model import tRNAZAPFormer
 from .factory.positional_encodings import *
-from .factory.transformer_encoder import TransformerEncoderWrapper
+from .factory.transformer_encoder import *
