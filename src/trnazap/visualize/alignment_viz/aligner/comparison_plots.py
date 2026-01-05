@@ -445,21 +445,33 @@ def run_statistical_comparisons(comparison_data, bwa_data, zap_data,
         differences = zap_idents - bwa_idents
         w_stat, p_value = stats.wilcoxon(differences - margin, alternative='greater')
         
+        mean_bwa = np.mean(bwa_idents)
+        mean_zap = np.mean(zap_idents)
         mean_diff = np.mean(differences)
+        
+        median_bwa = np.median(bwa_idents)
+        median_zap = np.median(zap_idents)
         median_diff = np.median(differences)
+        
         significant = p_value < 0.05
         
         if test_name:
             print(f"\n{test_name}")
-        print(f"  N={len(differences):,} | Mean Δ={mean_diff:+.4f} | "
-              f"Median Δ={median_diff:+.4f} | p={p_value:.4e} | "
-              f"{'✓ Zap superior' if significant else '✗ Not superior'}")
+        print(f"  N={len(differences):,}")
+        print(f"  BWA: mean={mean_bwa:.4f}, median={median_bwa:.4f}")
+        print(f"  Zap: mean={mean_zap:.4f}, median={median_zap:.4f}")
+        print(f"  Δ: mean={mean_diff:+.4f}, median={median_diff:+.4f}")
+        print(f"  p={p_value:.4e} | {'✓ Zap superior' if significant else '✗ Not superior'}")
         
         return {
             'test_type': 'paired_wilcoxon',
             'test_name': test_name,
             'n': len(differences),
+            'mean_bwa': mean_bwa,
+            'mean_zap': mean_zap,
             'mean_diff': mean_diff,
+            'median_bwa': median_bwa,
+            'median_zap': median_zap,
             'median_diff': median_diff,
             'p_value': p_value,
             'significant': significant,
@@ -660,7 +672,11 @@ def run_statistical_comparisons(comparison_data, bwa_data, zap_data,
                 'Test_Type': result['test_type'],
                 'Test': result['test_name'],
                 'N_reads': result['n'],
+                'BWA_mean_identity': result['mean_bwa'],
+                'Zap_mean_identity': result['mean_zap'],
                 'Mean_diff': result['mean_diff'],
+                'BWA_median_identity': result['median_bwa'],
+                'Zap_median_identity': result['median_zap'],
                 'Median_diff': result['median_diff'],
                 'P_value': result['p_value'],
                 'Significant': result['significant'],
@@ -674,7 +690,11 @@ def run_statistical_comparisons(comparison_data, bwa_data, zap_data,
             'Test_Type': result['test_type'],
             'Test': result['test_name'],
             'N_reads': f"BWA:{result['n_bwa']}, Zap:{result['n_zap']}",
+            'BWA_mean_identity': result['mean_bwa'],
+            'Zap_mean_identity': result['mean_zap'],
             'Mean_diff': result['mean_diff'],
+            'BWA_median_identity': result['median_bwa'],
+            'Zap_median_identity': result['median_zap'],
             'Median_diff': result['median_diff'],
             'P_value': result['p_value'],
             'Significant': result['significant'],
@@ -688,7 +708,11 @@ def run_statistical_comparisons(comparison_data, bwa_data, zap_data,
             'Test_Type': result['test_type'],
             'Test': result['test_name'],
             'N_reads': result['total_reads'],
+            'BWA_mean_identity': 'N/A',
+            'Zap_mean_identity': 'N/A',
             'Mean_diff': result['success_rate_diff'],
+            'BWA_median_identity': 'N/A',
+            'Zap_median_identity': 'N/A',
             'Median_diff': 'N/A',
             'P_value': result['p_value'],
             'Significant': result['significant'],
@@ -811,6 +835,18 @@ def plot_length_identity_heatmaps(comparison_data, bwa_data, zap_data,
 # PLOT 8: Per-Read Identity 2D Histogram
 # ============================================================================
 
+def rmse_numpy(actual, predicted):
+    """
+    Calculates the Root Mean Square Error (RMSE) between two numpy vectors.
+    """
+    actual = np.array(actual)
+    predicted = np.array(predicted)
+    # Calculate the mean of the squared differences
+    mse = np.mean((actual - predicted)**2) 
+    # Take the square root
+    rmse = np.sqrt(mse)
+    return rmse
+
 def plot_per_read_identity_2dhist(comparison_data, ident_threshold=0.75,
                                   out_dir=None, out_prefix=''):
     """
@@ -832,6 +868,8 @@ def plot_per_read_identity_2dhist(comparison_data, ident_threshold=0.75,
         'bwa_ident': bwa_idents,
         'zap_ident': zap_idents
     })
+
+    print(f"Per Read Alignment Identity RMSE: {rmse_numpy(np.array(df['bwa_ident'].to_list()), np.array(df['zap_ident'].to_list()))}")
     
     # Create 1% bins starting from floored ident_threshold
     bin_start = np.floor(ident_threshold * 100) / 100  # Round down to nearest 0.01
