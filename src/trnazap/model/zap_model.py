@@ -52,7 +52,8 @@ class tRNAZAPFormer(nn.Module):
             num_heads, 
             dim_feedforward, 
             num_layers, 
-            dropout_rate_transformer
+            dropout_rate_transformer,
+            norm_first=False
         )
 
         self.frag_classifier = None

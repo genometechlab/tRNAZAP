@@ -38,10 +38,12 @@ class EncoderLayer(nn.Module):
         dropout: float = 0.1,
         activation: str = "relu",
         batch_first: bool = True,
+        norm_first: bool = False,
     ):
         super().__init__()
         self.d_model = d_model
         self.nhead = nhead
+        self.norm_first = norm_first
 
         self.self_attn = nn.MultiheadAttention(
             embed_dim=d_model,
@@ -69,28 +71,45 @@ class EncoderLayer(nn.Module):
 
     def forward(
         self,
-        x: torch.Tensor,                                 # [B, L, D]
-        key_padding_mask: Optional[torch.Tensor] = None,  # [B, L], True=pad
-        attn_mask: Optional[torch.Tensor] = None,         # [L, L] or [B*nhead, L, L]
+        x: torch.Tensor,
+        key_padding_mask: Optional[torch.Tensor] = None,
+        attn_mask: Optional[torch.Tensor] = None,
         need_weights: bool = False,
     ):
-        # ---- Self-attention block (pre-norm) ----
-        x_norm = self.norm1(x)
-        attn_out, attn_w = self.self_attn(
-            x_norm, x_norm, x_norm,
-            attn_mask=attn_mask,
-            key_padding_mask=key_padding_mask,
-            need_weights=need_weights,
-            average_attn_weights=False if need_weights else True,
-        )
-        x = x + self.dropout1(attn_out)
+        if self.norm_first:
+            x_norm = self.norm1(x)
+            attn_out, attn_w = self.self_attn(
+                x_norm, x_norm, x_norm,
+                attn_mask=attn_mask,
+                key_padding_mask=key_padding_mask,
+                need_weights=need_weights,
+                average_attn_weights=False if need_weights else True,
+            )
+            x = x + self.dropout1(attn_out)
 
-        # ---- FFN block (pre-norm) ----
-        x_norm = self.norm2(x)
-        ffn = self.linear2(self.dropout(self.activation(self.linear1(x_norm))))
-        x = x + self.dropout2(ffn)
+            x_norm = self.norm2(x)
+            ffn_out = self.linear2(self.dropout(self.activation(self.linear1(x_norm))))
+            x = x + self.dropout2(ffn_out)
 
-        return (x, attn_w) if need_weights else x
+            return (x, attn_w) if need_weights else x
+
+        else:
+            attn_out, attn_w = self.self_attn(
+                x, x, x,
+                attn_mask=attn_mask,
+                key_padding_mask=key_padding_mask,
+                need_weights=need_weights,
+                average_attn_weights=False if need_weights else True,
+            )
+            x = x + self.dropout1(attn_out)
+            x = self.norm1(x)
+
+            ffn_out = self.linear2(self.dropout(self.activation(self.linear1(x))))
+            x = x + self.dropout2(ffn_out)
+            x = self.norm2(x)
+
+            return (x, attn_w) if need_weights else x
+
 
 
 class EncoderWrapper(nn.Module):
@@ -102,6 +121,7 @@ class EncoderWrapper(nn.Module):
         num_layers: int,
         dropout: float = 0.1,
         activation: str = "relu",
+        norm_first: bool = False,
     ):
         super().__init__()
         self.layers = nn.ModuleList([
@@ -112,6 +132,7 @@ class EncoderWrapper(nn.Module):
                 dropout=dropout,
                 activation=activation,
                 batch_first=True,
+                norm_first=norm_first
             )
             for _ in range(num_layers)
         ])
