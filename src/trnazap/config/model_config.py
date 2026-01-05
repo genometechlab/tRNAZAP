@@ -24,8 +24,8 @@ class ModelConfig:
     # Model architecture parameters
     chunk_size: int
     max_seq_len: int
-    num_classes: int
-    num_classes_seq2seq: int
+    num_classification_classes: int
+    num_segmentation_classes: int
     nhead: int
     num_layers: int
     hidden_size: int
@@ -153,8 +153,8 @@ class ModelLoader:
         model = model_class(
             input_size=self.config.chunk_size,
             max_seq_len=self.config.max_seq_len,
-            num_classes_seq2seq=self.config.num_classes_seq2seq,
-            num_classes=self.config.num_classes,
+            num_classes=self.config.num_classification_classes,
+            num_classes_seq2seq=self.config.num_segmentation_classes,
             num_heads=self.config.nhead,
             num_layers=self.config.num_layers,
             hidden_size=self.config.hidden_size,

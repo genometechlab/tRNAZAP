@@ -1,7 +1,7 @@
 chunk_size: 54
 max_seq_len: 1200
-num_classes: 51
-num_classes_seq2seq: 4
+num_classification_classes: 51
+num_segmentation_classes: 4
 model_name: "TransformerZAM_multitask_CLSOnly"
 nhead: 4
 num_layers: 4

@@ -16,8 +16,8 @@ class InferenceMetadata:
     max_seq_len: int
     model_type: str
     model_name: str
-    num_classes: int
-    num_classes_seq2seq: int
+    num_classification_classes: int
+    num_segmentation_classes: int
 
     # Label names
     label_names: dict
@@ -46,8 +46,8 @@ class InferenceMetadata:
             max_seq_len=self.max_seq_len,
             model_type=self.model_type,
             model_name=self.model_name,
-            num_classes=self.num_classes,
-            num_classes_seq2seq=self.num_classes_seq2seq,
+            num_classification_classes=self.num_classification_classes,
+            num_segmentation_classes=self.num_segmentation_classes,
             label_names=self.label_names.copy() if self.label_names else None,
             batch_size=self.batch_size,
             device=self.device,

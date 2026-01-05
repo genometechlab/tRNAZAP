@@ -17,4 +17,3 @@ def load_weights(model, path):
         print("Unexpected keys:")
         for key in unexpected_keys:
             print(key)
-    return model
