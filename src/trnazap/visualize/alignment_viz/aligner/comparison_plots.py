@@ -404,6 +404,13 @@ def plot_alignment_classification_heatmap(comparison_data, model,
         present_cols.append('Unmapped')
     
     count_matrix = count_matrix.reindex(index=present_rows, columns=present_cols, fill_value=0)
+    if out_dir:
+        save_path = os.path.join(out_dir, f'{out_prefix}alignment_classification_heatmap.pdf')
+        fig.savefig(save_path, dpi=300, bbox_inches='tight')
+        
+        # Save count matrix
+        matrix_path = os.path.join(out_dir, f'{out_prefix}_aligner_comparison_count_matrix.tsv')
+        count_matrix.to_csv(matrix_path, sep='\t')
     
     # Plot
     fig, ax = plt.subplots(figsize=(max(14, len(present_cols) * 0.3),

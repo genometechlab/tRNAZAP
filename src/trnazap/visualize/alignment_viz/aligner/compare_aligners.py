@@ -341,7 +341,6 @@ def generate_aligner_comparison_figures(
     }
 
 
-# Example usage
 if __name__ == "__main__":
     import sys
     
