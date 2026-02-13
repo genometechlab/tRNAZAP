@@ -1,5 +1,5 @@
-from .visualize import ResultsVisualizer
+from .inference_viz.Inference_visualizer import ZAPInferenceVisualizer
 
 __all__ = [
-    'ResultsVisualizer',
+    'ZAPInferenceVisualizer',
 ]

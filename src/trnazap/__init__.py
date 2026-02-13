@@ -5,7 +5,7 @@ from .io import ZIRReader, ZIRWriter
 from .storages import InferenceResults, InferenceMetadata, ReadResult, ReadResultCompressed
 
 # Visualization
-from .visualize import ResultsVisualizer
+from .visualize import ZAPInferenceVisualizer
 
 # Export names
 __all__ = [
@@ -20,5 +20,5 @@ __all__ = [
     'ReadResultCompressed',
     
     # Visualization
-    'ResultsVisualizer',
+    'ZAPInferenceVisualizer',
 ]
