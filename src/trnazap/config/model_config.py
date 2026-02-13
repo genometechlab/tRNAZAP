@@ -115,6 +115,24 @@ class ModelConfig:
         config_dict = cls._check_fields(config_dict)
         return cls(**config_dict)
     
+    @classmethod
+    def load_config(cls, cfg: Union["ModelConfig", str, Dict])-> "ModelConfig":
+        if isinstance(cfg, cls):
+            return cfg
+        if isinstance(cfg, str):
+            cfg_path = Path(cfg)
+            cfg_suffix = cfg_path.suffix.lower()
+            if cfg_suffix==".yaml" or cfg_suffix=="yml":
+                return cls.from_yaml(cfg)
+            elif cfg_suffix=='.json':
+                return cls.from_json(cfg)
+            raise ValueError(f"Unsupported config file type: {cfg_suffix}")
+        
+        if isinstance(cfg, dict):
+            return cls.from_dict(cfg)
+        
+        raise TypeError("config must be ModelConfig | str | dict")
+    
     def to_yaml(self, yaml_path: PathLike) -> None:
         """Save configuration to YAML file."""
         yaml_path = Path(yaml_path)

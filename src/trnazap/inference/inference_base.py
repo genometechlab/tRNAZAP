@@ -39,7 +39,7 @@ class InferenceBase(ABC):
         config: Union[ModelConfig, str, Dict],
         device: Optional[torch.device] = None,
     ) -> None:
-        self.config: ModelConfig = self._load_config(config)
+        self.config: ModelConfig = ModelConfig.load_config(cfg=config)
         self.device: torch.device = (
             device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
         )
@@ -72,20 +72,6 @@ class InferenceBase(ABC):
         return SequenceStandardizer().fit_transform(
             [signal.reshape(-1, 1)]
         )[0].ravel()
-
-    @staticmethod
-    def _load_config(cfg: Union[ModelConfig, str, Dict]) -> ModelConfig:
-        if isinstance(cfg, ModelConfig):
-            return cfg
-        if isinstance(cfg, str):
-            if cfg.endswith(".yaml"):
-                return ModelConfig.from_yaml(cfg)
-            if cfg.endswith(".json"):
-                return ModelConfig.from_json(cfg)
-            raise ValueError(f"Unsupported config file type: {cfg}")
-        if isinstance(cfg, dict):
-            return ModelConfig.from_dict(cfg)
-        raise TypeError("config must be ModelConfig | str | dict")
     
     def _resolve_paths(self, paths: PathLikeList) -> PathSet:
         if isinstance(paths, (str, Path)):

@@ -38,7 +38,7 @@ class SingleReadInference(InferenceBase):
         config: Union[ModelConfig, str, Dict],
         device: Optional[torch.device] = None,
     ) -> None:
-        self.config: ModelConfig = self._load_config(config)
+        self.config: ModelConfig = ModelConfig.load_config(cfg=config)
         self.device: torch.device = (
             device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
         )
