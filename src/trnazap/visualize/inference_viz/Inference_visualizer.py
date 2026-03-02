@@ -312,7 +312,7 @@ class ZAPInferenceVisualizer:
 
     def _format_figure(self, ax: plt.Axes, read_id: str, predicted_cls: str, signal_length: int) -> None:
         # Title & axes
-        title = f"Read: {read_id}, Prediction: {predicted_cls}"
+        title = f"Read: {read_id}"
         if predicted_cls is not None:
             if hasattr(self, 'config') and isinstance(self.config, ModelConfig):
                 label_names = getattr(self.config, 'label_names', None)
