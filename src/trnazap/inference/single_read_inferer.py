@@ -99,11 +99,10 @@ class SingleReadInference(InferenceBase):
         aux_out = dict()
         
         if return_attention_scores and hasattr(self.model, 'get_cls_attention'):
-            cls_scores, cls_attn, cls_attn_mean = self.model.get_cls_attention(**inputs, average_heads=True)
-            cls_scores = cls_scores.cpu().numpy()[0]
+            cls_attn, cls_attn_mean = self.model.get_cls_attention(**inputs, average_heads=True)
             cls_attn = cls_attn.cpu().numpy()[0]
             cls_attn_mean = cls_attn_mean.cpu().numpy()[0]
-            aux_out["attention"] = (cls_scores, cls_attn, cls_attn_mean)
+            aux_out["attention"] = (cls_attn, cls_attn_mean)
             
         if return_token_saliency and hasattr(self.model, 'get_token_saliency'):
             sal, chosen = self.model.get_token_saliency(**inputs, 

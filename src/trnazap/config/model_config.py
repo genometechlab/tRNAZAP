@@ -2,8 +2,7 @@ import os
 import glob
 import math
 import torch
-import torch.nn as nn
-from dataclasses import dataclass, field, fields, MISSING
+from dataclasses import dataclass, fields, MISSING
 from typing import Optional, Dict, Any, Union, List, Protocol
 import yaml
 import json
@@ -28,7 +27,7 @@ class ModelConfig:
     # -----------------------------------------------------------------------
     # Model architecture — required
     # -----------------------------------------------------------------------
-    chunk_size: int                     # effective stride = samples per token
+    chunk_size: int
     max_seq_len: int
     num_classification_classes: int
     num_segmentation_classes: int
@@ -36,17 +35,21 @@ class ModelConfig:
     num_layers: int
     hidden_size: int
     dim_feedforward: int
-    positional_encoding_type: str
     dropout: float
 
     # -----------------------------------------------------------------------
-    # Signal encoder stem — optional (defaults = identity / backward compat)
+    # Signal encoder stem
     # -----------------------------------------------------------------------
-    stem_type: str = "identity"                      # "identity" | "conv"
-    stem_channels: Optional[List[int]] = None        # e.g. [1, 32, 64, 128]
-    stem_kernel_sizes: Optional[List[int]] = None    # per-layer kernel sizes
-    stem_strides: Optional[List[int]] = None         # per-layer strides
-    stem_activation: str = "gelu"                    # "relu" | "gelu"
+    stem_type: str = "identity"                    # "identity" | "conv"
+    stem_channels: Optional[List[int]] = None      # e.g. [1, 32, 64, 128]
+    stem_kernel_sizes: Optional[List[int]] = None  # per-layer kernel sizes
+    stem_strides: Optional[List[int]] = None       # per-layer strides
+    stem_activation: str = "gelu"                  # "relu" | "gelu"
+
+    # -----------------------------------------------------------------------
+    # Positional encoding
+    # -----------------------------------------------------------------------
+    positional_encoding_type: str = "sinusoidal"   # "sinusoidal" | "learnable" | "rope"
 
     # -----------------------------------------------------------------------
     # Model information
@@ -66,11 +69,10 @@ class ModelConfig:
     # -----------------------------------------------------------------------
     def __post_init__(self):
         self._validate_stem()
+        self._validate_positional_encoding()
 
     def _validate_stem(self) -> None:
-        """Validate stem configuration and consistency with chunk_size."""
         if self.stem_type == "identity":
-            # Conv stem fields are irrelevant — silently ignore them
             return
 
         if self.stem_type == "conv":
@@ -116,16 +118,20 @@ class ModelConfig:
             f"Unknown stem_type '{self.stem_type}'. Expected 'identity' or 'conv'."
         )
 
+    def _validate_positional_encoding(self) -> None:
+        valid_pe = {"sinusoidal", "learnable", "rope"}
+        if self.positional_encoding_type not in valid_pe:
+            raise ValueError(
+                f"Unknown positional_encoding_type '{self.positional_encoding_type}'. "
+                f"Expected one of {valid_pe}."
+            )
+
     # -----------------------------------------------------------------------
     # Derived property
     # -----------------------------------------------------------------------
     @property
     def effective_stride(self) -> int:
-        """
-        Number of raw signal samples consumed per output token.
-        Always equals chunk_size — enforced by _validate_stem().
-        Exposed as a property for clarity at call sites.
-        """
+        """Samples per output token. Always equals chunk_size."""
         return self.chunk_size
 
     # -----------------------------------------------------------------------
@@ -240,7 +246,6 @@ class ModelLoader:
         self.model = None
 
     def build_model(self) -> ModelProtocol:
-        """Build model from configuration."""
         module = importlib.import_module("trnazap.model")
         model_class = getattr(module, self.config.model_name)
 
@@ -261,6 +266,7 @@ class ModelLoader:
             num_layers=self.config.num_layers,
             hidden_size=self.config.hidden_size,
             dim_feedforward=self.config.dim_feedforward,
+            # Positional encoding
             positional_encoding_type=self.config.positional_encoding_type,
         )
 

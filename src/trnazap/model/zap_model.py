@@ -12,12 +12,12 @@ class tRNAZAPFormer(nn.Module):
         self,
         # --- Signal encoder ---
         stem_type: Literal["identity", "conv"] = "identity",
-        chunk_size: int = 64,                        # used by identity stem
-        stem_channels: Optional[List[int]] = None,   # used by conv stem
+        chunk_size: int = 64,
+        stem_channels: Optional[List[int]] = None,
         stem_kernel_sizes: Optional[List[int]] = None,
         stem_strides: Optional[List[int]] = None,
         stem_activation: Literal["relu", "gelu"] = "gelu",
-        effective_stride: Optional[int] = None,      # validated against stem
+        effective_stride: Optional[int] = None,
         # --- Transformer ---
         hidden_size: int = 256,
         num_heads: int = 4,
@@ -30,7 +30,7 @@ class tRNAZAPFormer(nn.Module):
         num_classification_classes: int = 22,
         num_segmentation_classes: int = 4,
         # --- Positional encoding ---
-        positional_encoding_type: Literal["learnable", "sinusoidal"] = "sinusoidal",
+        positional_encoding_type: Literal["learnable", "sinusoidal", "rope"] = "sinusoidal",
         # --- Tasks ---
         enabled_tasks: Optional[Iterable[Task]] = None,
     ):
@@ -39,6 +39,8 @@ class tRNAZAPFormer(nn.Module):
         if enabled_tasks is None:
             enabled_tasks = ("fragmentation", "classification", "segmentation")
         self.enabled_tasks = set(enabled_tasks)
+        use_rope = positional_encoding_type == "rope"
+        self.use_rope = use_rope
 
         # ------------------------------------------------------------------
         # Signal encoder
@@ -63,19 +65,28 @@ class tRNAZAPFormer(nn.Module):
         # Learnable CLS token
         self.cls_token = nn.Parameter(torch.randn(1, 1, hidden_size))
 
-        # Positional encoding
-        if positional_encoding_type == "learnable":
-            from .factory import LearnablePositionalEncoding
-            self.positional_encoding = LearnablePositionalEncoding(max_seq_len, hidden_size)
-        elif positional_encoding_type == "sinusoidal":
-            from .factory import SinusoidalPositionalEncoding
-            self.positional_encoding = SinusoidalPositionalEncoding(max_seq_len, hidden_size)
-        else:
-            raise ValueError("Invalid positional encoding type")
+        # ------------------------------------------------------------------
+        # Positional encoding — skipped when RoPE is active
+        # ------------------------------------------------------------------
+        self.positional_encoding = None
+        if not use_rope:
+            if positional_encoding_type == "learnable":
+                from .factory import LearnablePositionalEncoding
+                self.positional_encoding = LearnablePositionalEncoding(max_seq_len, hidden_size)
+            elif positional_encoding_type == "sinusoidal":
+                from .factory import SinusoidalPositionalEncoding
+                self.positional_encoding = SinusoidalPositionalEncoding(max_seq_len, hidden_size)
+            else:
+                raise ValueError(
+                    f"Invalid positional_encoding_type '{positional_encoding_type}'. "
+                    "Expected 'sinusoidal', 'learnable', or 'rope'."
+                )
 
         self.encoding_type = positional_encoding_type
 
+        # ------------------------------------------------------------------
         # Transformer encoder
+        # ------------------------------------------------------------------
         self.encoder = EncoderWrapper(
             hidden_size,
             num_heads,
@@ -83,6 +94,8 @@ class tRNAZAPFormer(nn.Module):
             num_layers,
             dropout_rate_transformer,
             norm_first=False,
+            use_rope=use_rope,
+            max_seq_len=max_seq_len,
         )
 
         # ------------------------------------------------------------------
@@ -121,18 +134,11 @@ class tRNAZAPFormer(nn.Module):
     # ----------------------------------------------------------------------
 
     def _encode_signal(self, signal: torch.Tensor) -> torch.Tensor:
-        """
-        Always returns [B, T, encoder_out_channels].
-        """
-        return self.signal_encoder(signal) 
+        """[B, N] → [B, T, encoder_out_channels]"""
+        return self.signal_encoder(signal)
 
     def _raw_length_to_tokens(self, raw_length: torch.Tensor) -> torch.Tensor:
-        """
-        Convert length tensor to token counts.
-
-        - New pipeline (raw signal):  length = raw samples → divide by effective_stride
-        - Legacy pipeline (3-D input): length already = token count → pass through
-        """
+        """Raw sample count → token count."""
         return (raw_length // self.signal_encoder.effective_stride).clamp_min(0)
 
     def _prep_embeddings_and_mask(
@@ -142,23 +148,22 @@ class tRNAZAPFormer(nn.Module):
     ):
         """
         Args:
-            signal: [B, N] raw  OR  [B, T, chunk_size] legacy
-            length: [B]
-                    - raw pipeline:    number of valid raw samples
-                    - legacy pipeline: number of valid tokens
+            signal: [B, N] raw signal
+            length: [B]    number of valid raw samples
 
         Returns:
             embedded:     [B, T+1, hidden_size]
             padding_mask: [B, T+1]  True = pad
+            token_length: [B]
         """
-        tokens = self._encode_signal(signal)                          # [B, T, C]
-        token_length = self._raw_length_to_tokens(length)  # [B]
+        tokens = self._encode_signal(signal)             # [B, T, C]
+        token_length = self._raw_length_to_tokens(length)
 
         batch_size, seq_len, _ = tokens.shape
         seq_len_plus_cls = seq_len + 1
 
         # Project + normalize
-        embedded = self.input_projection(tokens)      # [B, T, D]
+        embedded = self.input_projection(tokens)         # [B, T, D]
         embedded = self.input_layernorm(embedded)
 
         # Prepend CLS token
@@ -172,9 +177,10 @@ class tRNAZAPFormer(nn.Module):
             .expand(batch_size, -1) >= lengths_with_cls.unsqueeze(1)
         )
 
-        # Positional encodings (non-CLS positions only)
-        abs_pe = self.positional_encoding(seq_len).to(embedded.device)  # [1, T, D]
-        embedded[:, 1:] += abs_pe * (~padding_mask[:, 1:]).unsqueeze(-1)
+        # Absolute positional encodings — skipped when RoPE is active
+        if self.positional_encoding is not None:
+            abs_pe = self.positional_encoding(seq_len).to(embedded.device)  # [1, T, D]
+            embedded[:, 1:] += abs_pe * (~padding_mask[:, 1:]).unsqueeze(-1)
 
         # Zero out padded slots
         embedded[padding_mask] = 0.0
@@ -193,11 +199,9 @@ class tRNAZAPFormer(nn.Module):
     ):
         """
         Args:
-            signal: [B, N] raw signal  OR  [B, T, chunk_size] legacy
-            length: [B]
-                    - raw pipeline:    number of valid raw samples
-                    - legacy pipeline: number of valid tokens
-            tasks:  subset of enabled_tasks to run; None = all enabled
+            signal: [B, N] raw signal
+            length: [B]    number of valid raw samples
+            tasks:  subset of enabled_tasks; None = all enabled
         """
         if tasks is None:
             tasks = self.enabled_tasks
@@ -248,7 +252,7 @@ class tRNAZAPFormer(nn.Module):
         self.eval()
         embedded, padding_mask, _ = self._prep_embeddings_and_mask(signal, length)
         encoded, attn_all = self.encoder(
-            embedded, key_padding_mask=padding_mask, return_attn=True
+            embedded, key_padding_mask=padding_mask, need_weights=True
         )
 
         last_attn = attn_all[-1]
@@ -286,8 +290,7 @@ class tRNAZAPFormer(nn.Module):
         logits = out["classification"]
         B = x.shape[0]
 
-        is_legacy = signal.dim() == 3
-        token_length = self._raw_length_to_tokens(length, is_legacy)
+        token_length = self._raw_length_to_tokens(length)
         T = self._encode_signal(x.detach()).shape[1]
 
         if target_class is None:
@@ -316,10 +319,9 @@ class tRNAZAPFormer(nn.Module):
         if use_abs:
             g = g.abs()
 
-        if not is_legacy:
-            # Raw signal [B, N]: reshape gradients into [B, T, stride] then reduce
-            stride = self.signal_encoder.effective_stride
-            g = g[:, : T * stride].reshape(B, T, stride)
+        # Raw signal [B, N]: reshape gradients into [B, T, stride] then reduce
+        stride = self.signal_encoder.effective_stride
+        g = g[:, : T * stride].reshape(B, T, stride)
 
         if reduce == "l2":
             sal = torch.sqrt((g ** 2).sum(dim=-1) + 1e-12)
