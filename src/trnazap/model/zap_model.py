@@ -8,7 +8,7 @@ Task = Literal["fragmentation", "classification", "segmentation"]
 class tRNAZAPFormer(nn.Module):
     def __init__(
         self,
-        input_size: int = 64,
+        chunk_size: int = 64,
         hidden_size: int = 256,
         num_heads: int = 4,
         dim_feedforward: int = 512,
@@ -28,7 +28,7 @@ class tRNAZAPFormer(nn.Module):
         self.enabled_tasks = set(enabled_tasks)
 
         # Input projection and normalization
-        self.input_projection = nn.Linear(input_size, hidden_size)
+        self.input_projection = nn.Linear(chunk_size, hidden_size)
         self.input_layernorm = nn.LayerNorm(hidden_size)
 
         # Learnable CLS token

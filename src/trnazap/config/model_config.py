@@ -26,7 +26,7 @@ class ModelConfig:
     max_seq_len: int
     num_classification_classes: int
     num_segmentation_classes: int
-    nhead: int
+    num_heads: int
     num_layers: int
     hidden_size: int
     dim_feedforward: int
@@ -169,15 +169,14 @@ class ModelLoader:
         model_class = getattr(module, model_name) 
 
         model = model_class(
-            input_size=self.config.chunk_size,
+            chunk_size=self.config.chunk_size,
             max_seq_len=self.config.max_seq_len,
-            num_classes=self.config.num_classification_classes,
-            num_classes_seq2seq=self.config.num_segmentation_classes,
-            num_heads=self.config.nhead,
+            num_classification_classes=self.config.num_classification_classes,
+            num_segmentation_classes=self.config.num_segmentation_classes,
+            num_heads=self.config.num_heads,
             num_layers=self.config.num_layers,
             hidden_size=self.config.hidden_size,
             dim_feedforward=self.config.dim_feedforward,
-            dropout_rate_transformer=self.config.dropout,
             positional_encoding_type=self.config.positional_encoding_type,
         )
         

@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from typing import Literal
+import warnings
 
 from .factory import TransformerEncoderWrapper
 
@@ -20,6 +21,12 @@ class TransformerZAM_multitask(nn.Module):
         max_seq_len: int = 1000,
         positional_encoding_type: Literal["learnable", "sinusoidal", "relative"] = "sinusoidal",
     ):
+        warnings.warn(
+            "TransformerZAM_multitask is deprecated and will be removed in a future version. "
+            "Use tRNAZAPFormer instead.",
+            DeprecationWarning,
+            stacklevel=2  # points warning to the caller, not this line
+        )
         super().__init__()
 
         # Input projection and normalization
