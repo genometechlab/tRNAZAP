@@ -292,9 +292,9 @@ class ModelLoader:
                 raise ValueError(f"No checkpoint found in {self.config.work_dir}")
 
         if checkpoint_path is None:
-            raise ValueError("No checkpoint path provided")
-
-        load_weights(self.model, checkpoint_path)
+            warnings.warn("No checkpoint path provided", stacklevel=2)
+        else:
+            load_weights(self.model, checkpoint_path)
 
     def get_model(self, load_checkpoint: bool = True) -> ModelProtocol:
         if self.model is None:

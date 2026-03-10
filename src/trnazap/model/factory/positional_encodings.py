@@ -39,15 +39,20 @@ class RelativePositionalEncoding(nn.Module):
         pos_indices = pos_indices.clamp(-self.max_len + 1, self.max_len - 1) + self.max_len - 1
         return self.relative_embedding[pos_indices]  # shape: [T, T, D]
     
-    
 class RoPEEmbedding(nn.Module):
     """
     Rotary Position Embedding (RoPE).
-    Computes sin/cos rotation matrices for a given sequence length and head dim.
-    Cached as a non-trainable buffer — recomputed only when T grows beyond cache.
+
+    Caches cos/sin tables as non-trainable buffers and grows them
+    dynamically if the sequence length exceeds the cache.
 
     Reference: "RoFormer: Enhanced Transformer with Rotary Position Embedding"
                (Su et al., 2021)
+
+    Args:
+        head_dim:    Dimension per attention head (must be even).
+        max_seq_len: Initial cache size — grows automatically if exceeded.
+        base:        Frequency base (default 10000).
     """
 
     def __init__(self, head_dim: int, max_seq_len: int = 4096, base: int = 10000):
@@ -56,7 +61,6 @@ class RoPEEmbedding(nn.Module):
         self.head_dim = head_dim
         self.base = base
 
-        # Precompute frequencies: [head_dim // 2]
         inv_freq = 1.0 / (
             base ** (torch.arange(0, head_dim, 2).float() / head_dim)
         )
@@ -66,41 +70,47 @@ class RoPEEmbedding(nn.Module):
     def _build_cache(self, seq_len: int) -> None:
         self._cache_len = seq_len
         t = torch.arange(seq_len, device=self.inv_freq.device).float()
-        freqs = torch.outer(t, self.inv_freq)           # [T, head_dim//2]
-        emb = torch.cat([freqs, freqs], dim=-1)         # [T, head_dim]
-        self.register_buffer("cos_cache", emb.cos()[None, None], persistent=False)  # [1,1,T,D]
-        self.register_buffer("sin_cache", emb.sin()[None, None], persistent=False)  # [1,1,T,D]
-
-    def _rotate_half(self, x: torch.Tensor) -> torch.Tensor:
-        """Rotate the second half of the last dimension."""
-        x1 = x[..., : x.shape[-1] // 2]
-        x2 = x[..., x.shape[-1] // 2 :]
-        return torch.cat([-x2, x1], dim=-1)
+        freqs = torch.outer(t, self.inv_freq)        # [T, head_dim//2]
+        emb = torch.cat([freqs, freqs], dim=-1)      # [T, head_dim]
+        # [1, 1, T, head_dim] — broadcasts over B and H
+        self.register_buffer("cos_cache", emb.cos()[None, None], persistent=False)
+        self.register_buffer("sin_cache", emb.sin()[None, None], persistent=False)
 
     def forward(
-        self, x: torch.Tensor, position_ids: Optional[torch.Tensor] = None
+        self,
+        x: torch.Tensor,
+        position_ids: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """
-        Apply RoPE to input tensor.
-
         Args:
             x:            [B, H, T, head_dim]
             position_ids: [B, T] optional; if None, positions are 0..T-1
 
         Returns:
-            x with rotary embedding applied: [B, H, T, head_dim]
+            [B, H, T, head_dim] with rotary embedding applied
         """
         B, H, T, D = x.shape
 
+        # Grow cache if needed
         if T > self._cache_len:
-            self._build_cache(T * 2)  # grow cache with headroom
+            self._build_cache(T * 2)
 
         if position_ids is None:
-            cos = self.cos_cache[:, :, :T, :]   # [1, 1, T, D]
+            cos = self.cos_cache[:, :, :T, :]        # [1, 1, T, D]
             sin = self.sin_cache[:, :, :T, :]
         else:
-            # position_ids: [B, T] → index into cache
             cos = self.cos_cache[0, 0][position_ids].unsqueeze(1)  # [B, 1, T, D]
             sin = self.sin_cache[0, 0][position_ids].unsqueeze(1)
 
-        return x * cos + self._rotate_half(x) * sin
+        # Cast to input dtype — avoids implicit AMP casts allocating temp tensors
+        cos = cos.to(x.dtype)
+        sin = sin.to(x.dtype)
+
+        # Fused rotation — split once, no separate _rotate_half allocation
+        x1 = x[..., : D // 2]                       # [B, H, T, D//2]
+        x2 = x[..., D // 2 :]                       # [B, H, T, D//2]
+
+        return torch.cat([
+            x1 * cos[..., : D // 2] - x2 * sin[..., : D // 2],
+            x2 * cos[..., D // 2 :] + x1 * sin[..., D // 2 :],
+        ], dim=-1)                                   # [B, H, T, D]
