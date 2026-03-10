@@ -16,7 +16,7 @@ from tqdm.auto import tqdm
 
 from .inference_base import InferenceBase
 from ..config.model_config import ModelConfig, ModelLoader
-from ..feeders import SequenceStandardizer, load_signal, collate_fn
+from ..feeders import SequenceStandardizer, collate_fn
 from ..storages import InferenceResults, InferenceMetadata, ReadResult, ReadResultCompressed
 from ..utils import PathSet
 from ..io import ZIRWriter, ZIRShardManager
@@ -39,20 +39,8 @@ class Inference(InferenceBase):
         device: Optional[torch.device] = None,
         save_raw: bool = False,
     ) -> None:
-        self.config: ModelConfig = ModelConfig.load_config(cfg=config)
-        if isinstance(device, str):
-            self.device = torch.device(device)
-        elif isinstance(device, torch.device):
-            self.device = device
-        else:
-            self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-            
+        super().__init__(config=config, device=device)
         self.save_raw = save_raw
-
-        self.queue_size_mult = 4
-        
-        self.model_loader = ModelLoader(self.config, self.device)
-        self.model = self.model_loader.get_model(load_checkpoint=True).eval()
 
     def predict(
         self,
@@ -364,7 +352,7 @@ class Inference(InferenceBase):
 
         inputs = {k: v.to(self.device) for k, v in batch_t["inputs"].items()}
         use_amp = (self.config.float_dtype in {"float16", "fp16"}) and (self.device.type != "cpu")
-        dtype = torch.float16 if self.config.float_dtype in {"float16", "fp16"} else None
+        dtype = torch.float16 if self.config.float_dtype in {"float16", "fp16"} else Non
         with torch.no_grad(), torch.amp.autocast(
             device_type=self.device.type, enabled=use_amp, dtype=dtype
         ):

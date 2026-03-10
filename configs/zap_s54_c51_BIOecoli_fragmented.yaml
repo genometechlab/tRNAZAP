@@ -1,4 +1,14 @@
-chunk_size: 54
+# --- Signal encoder ---
+stem_type: "identity"       # "identity" | "conv"
+chunk_size: 54              # effective stride = samples per output token (ALWAYS)
+
+# Conv stem only (ignored for identity):
+stem_channels: [1, 32, 64, 128]   # len - 1 == number of layers
+stem_kernel_sizes: [10, 8, 4]     # per layer
+stem_strides: [3, 3, 2]           # per layer — product MUST equal chunk_size (18)
+stem_activation: "gelu"
+
+# --- Transformer ---
 max_seq_len: 1200
 num_classification_classes: 51
 num_segmentation_classes: 4
@@ -10,10 +20,8 @@ dim_feedforward: 512
 dropout: 0.1
 positional_encoding_type: "sinusoidal"
 
-# Data type
-float_dtype: "float16"  # Options: float16 float32 float64
-
-# Model checkpoint
+# --- Runtime ---
+float_dtype: "float16"
 checkpoint_path: "../checkpoints/zap_s54_c51_BIOecoli_fragmented.pth"
 
 label_names:

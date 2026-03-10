@@ -3,24 +3,20 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 
 import logging
-import queue
-import threading
 import time
 from pathlib import Path
-from typing import Dict, List, Optional, Union, Iterator
-from uuid import UUID
-from dataclasses import dataclass, field
+from typing import Dict, List, Optional, Union
 
 import numpy as np
 import pod5
 import torch
-import tqdm
+from uuid import UUID
 
 from ..config.model_config import ModelConfig, ModelLoader
-from ..feeders import SequenceStandardizer, load_signal, collate_fn
+from ..feeders import SequenceStandardizer
 from ..storages import InferenceResults, InferenceMetadata, ReadResult
 from ..utils import PathSet
-from ..io import ZIRWriter, ZIRShardManager
+from ..io import ZIRShardManager
 
 
 logger = logging.getLogger(__name__)
@@ -28,11 +24,8 @@ logger = logging.getLogger(__name__)
 PathLike = Union[str, Path]
 PathLikeList = Union[PathLike, List[PathLike]]
 
+
 class InferenceBase(ABC):
-    """
-    Stream reads from POD5, preprocess on CPU, batch on-the-fly,
-    and run inference on GPU.
-    """
 
     def __init__(
         self,
@@ -40,30 +33,49 @@ class InferenceBase(ABC):
         device: Optional[torch.device] = None,
     ) -> None:
         self.config: ModelConfig = ModelConfig.load_config(cfg=config)
-        self.device: torch.device = (
-            device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        )
-
+        if isinstance(device, str):
+            self.device = torch.device(device)
+        elif isinstance(device, torch.device):
+            self.device = device
+        else:
+            self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.queue_size_mult = 4
-        
         self.model_loader = ModelLoader(self.config, self.device)
         self.model = self.model_loader.get_model(load_checkpoint=True).eval()
 
     def _process_record(self, rec: pod5.ReadRecord) -> Dict:
-        """Return a single pre-processed sample dict for one read."""
+        """
+        Return a single pre-processed sample dict for one read.
+
+        Signal is z-scored and truncated to the nearest multiple of
+        effective_stride, then stored as a 1-D array [N].
+        Token count is computed here so collate_fn and the model
+        receive consistent length values.
+        """
         dtype = np.float64 if self.config.float_dtype == "float64" else np.float32
+
         sig = rec.signal.astype(dtype)
         sig = self._local_standardize(sig)
-        sig = load_signal(
-            sig,
-            window_size=self.config.chunk_size,
-            step_size=self.config.chunk_size,
-            max_seq_len=self.config.max_seq_len,
-        )
+
+        # Truncate to nearest multiple of effective_stride
+        stride = self.config.effective_stride      # replaces chunk_size in pipeline
+        max_samples = self.config.max_seq_len * stride
+        sig = sig[: (sig.shape[0] // stride) * stride]  # drop last incomplete chunk
+        if len(sig) > max_samples:
+            sig = sig[:max_samples]
+
+        num_tokens = len(sig) // stride
         sig = sig.astype(dtype)
+
         return dict(
-            inputs=dict(signal=sig, length=sig.shape[0]),
-            metadata=dict(read_id=str(rec.read_id), num_tokens=sig.shape[0]),
+            inputs=dict(
+                signal=sig,           # [N]  raw 1-D signal
+                length=len(sig),      # raw sample count — model converts to tokens
+            ),
+            metadata=dict(
+                read_id=str(rec.read_id),
+                num_tokens=num_tokens,
+            ),
         )
 
     @staticmethod
@@ -72,18 +84,20 @@ class InferenceBase(ABC):
         return SequenceStandardizer().fit_transform(
             [signal.reshape(-1, 1)]
         )[0].ravel()
-    
+
     def _resolve_paths(self, paths: PathLikeList) -> PathSet:
         if isinstance(paths, (str, Path)):
             return PathSet([paths])
         elif isinstance(paths, list):
             return PathSet(paths)
         else:
-            raise TypeError(f"Expected str, Path, or list of them, got {type(paths).__name__}")
+            raise TypeError(
+                f"Expected str, Path, or list of them, got {type(paths).__name__}"
+            )
 
     def _build_metadata(self, pod5_pathset: PathSet, batch_size: int) -> InferenceMetadata:
         return InferenceMetadata(
-            chunk_size=self.config.chunk_size,
+            chunk_size=self.config.effective_stride,
             max_seq_len=self.config.max_seq_len,
             model_type=getattr(self.config, "model_type", "transformer"),
             model_name=self.config.model_name,

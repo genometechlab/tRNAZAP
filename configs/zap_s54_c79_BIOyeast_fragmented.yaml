@@ -1,4 +1,14 @@
-chunk_size: 54
+# --- Signal encoder ---
+stem_type: "identity"       # "identity" | "conv"
+chunk_size: 54              # effective stride = samples per output token (ALWAYS)
+
+# Conv stem only (ignored for identity):
+stem_channels: [1, 32, 64, 128]   # len - 1 == number of layers
+stem_kernel_sizes: [10, 8, 4]     # per layer
+stem_strides: [3, 3, 2]           # per layer — product MUST equal chunk_size (18)
+stem_activation: "gelu"
+
+# --- Transformer ---
 max_seq_len: 1200
 num_classification_classes: 79
 num_segmentation_classes: 4

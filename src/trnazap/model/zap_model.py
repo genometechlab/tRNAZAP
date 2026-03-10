@@ -1,14 +1,24 @@
 import torch
 import torch.nn as nn
-from typing import Optional, Literal, Iterable
+from typing import Optional, Literal, Iterable, List
 from .factory import EncoderWrapper
+from .factory import SignalEncoder, IdentitySignalEncoder, build_signal_encoder
 
 Task = Literal["fragmentation", "classification", "segmentation"]
+
 
 class tRNAZAPFormer(nn.Module):
     def __init__(
         self,
-        chunk_size: int = 64,
+        # --- Signal encoder ---
+        stem_type: Literal["identity", "conv"] = "identity",
+        chunk_size: int = 64,                        # used by identity stem
+        stem_channels: Optional[List[int]] = None,   # used by conv stem
+        stem_kernel_sizes: Optional[List[int]] = None,
+        stem_strides: Optional[List[int]] = None,
+        stem_activation: Literal["relu", "gelu"] = "gelu",
+        effective_stride: Optional[int] = None,      # validated against stem
+        # --- Transformer ---
         hidden_size: int = 256,
         num_heads: int = 4,
         dim_feedforward: int = 512,
@@ -16,25 +26,44 @@ class tRNAZAPFormer(nn.Module):
         dropout_rate_transformer: float = 0.2,
         dropout_rate_fc: float = 0.2,
         max_seq_len: int = 1000,
+        # --- Task heads ---
         num_classification_classes: int = 22,
         num_segmentation_classes: int = 4,
+        # --- Positional encoding ---
         positional_encoding_type: Literal["learnable", "sinusoidal"] = "sinusoidal",
-        enabled_tasks: Optional[Iterable[Task]] = None,  # NEW
+        # --- Tasks ---
+        enabled_tasks: Optional[Iterable[Task]] = None,
     ):
         super().__init__()
-        
+
         if enabled_tasks is None:
             enabled_tasks = ("fragmentation", "classification", "segmentation")
         self.enabled_tasks = set(enabled_tasks)
 
+        # ------------------------------------------------------------------
+        # Signal encoder
+        # ------------------------------------------------------------------
+        self.signal_encoder: SignalEncoder = build_signal_encoder(
+            stem_type=stem_type,
+            chunk_size=chunk_size,
+            stem_channels=stem_channels,
+            stem_kernel_sizes=stem_kernel_sizes,
+            stem_strides=stem_strides,
+            stem_activation=stem_activation,
+            effective_stride=effective_stride,
+        )
+        encoder_out_channels = self.signal_encoder.out_channels
+
+        # ------------------------------------------------------------------
         # Input projection and normalization
-        self.input_projection = nn.Linear(chunk_size, hidden_size)
+        # ------------------------------------------------------------------
+        self.input_projection = nn.Linear(encoder_out_channels, hidden_size)
         self.input_layernorm = nn.LayerNorm(hidden_size)
 
         # Learnable CLS token
         self.cls_token = nn.Parameter(torch.randn(1, 1, hidden_size))
 
-        # Positional encoding module
+        # Positional encoding
         if positional_encoding_type == "learnable":
             from .factory import LearnablePositionalEncoding
             self.positional_encoding = LearnablePositionalEncoding(max_seq_len, hidden_size)
@@ -48,14 +77,17 @@ class tRNAZAPFormer(nn.Module):
 
         # Transformer encoder
         self.encoder = EncoderWrapper(
-            hidden_size, 
-            num_heads, 
-            dim_feedforward, 
-            num_layers, 
+            hidden_size,
+            num_heads,
+            dim_feedforward,
+            num_layers,
             dropout_rate_transformer,
-            norm_first=False
+            norm_first=False,
         )
 
+        # ------------------------------------------------------------------
+        # Task heads
+        # ------------------------------------------------------------------
         self.frag_classifier = None
         if "fragmentation" in self.enabled_tasks:
             self.frag_classifier = nn.Sequential(
@@ -84,105 +116,147 @@ class tRNAZAPFormer(nn.Module):
         if "segmentation" in self.enabled_tasks:
             self.token_classifier = nn.Linear(hidden_size, num_segmentation_classes)
 
-        
-    def _prep_embeddings_and_mask(self, signal: torch.Tensor, length: torch.Tensor):
+    # ----------------------------------------------------------------------
+    # Internal helpers
+    # ----------------------------------------------------------------------
+
+    def _encode_signal(self, signal: torch.Tensor) -> torch.Tensor:
         """
+        Always returns [B, T, encoder_out_channels].
+        """
+        return self.signal_encoder(signal) 
+
+    def _raw_length_to_tokens(self, raw_length: torch.Tensor) -> torch.Tensor:
+        """
+        Convert length tensor to token counts.
+
+        - New pipeline (raw signal):  length = raw samples → divide by effective_stride
+        - Legacy pipeline (3-D input): length already = token count → pass through
+        """
+        return (raw_length // self.signal_encoder.effective_stride).clamp_min(0)
+
+    def _prep_embeddings_and_mask(
+        self,
+        signal: torch.Tensor,
+        length: torch.Tensor,
+    ):
+        """
+        Args:
+            signal: [B, N] raw  OR  [B, T, chunk_size] legacy
+            length: [B]
+                    - raw pipeline:    number of valid raw samples
+                    - legacy pipeline: number of valid tokens
+
         Returns:
-          embedded: [B, T+1, D]  (with CLS prepended, PE added, pads zeroed)
-          padding_mask: [B, T+1] (True = pad)
-          seq_len: int (original T without CLS)
+            embedded:     [B, T+1, hidden_size]
+            padding_mask: [B, T+1]  True = pad
         """
-        batch_size, seq_len, _ = signal.shape
+        tokens = self._encode_signal(signal)                          # [B, T, C]
+        token_length = self._raw_length_to_tokens(length)  # [B]
+
+        batch_size, seq_len, _ = tokens.shape
         seq_len_plus_cls = seq_len + 1
 
-        # Input projection
-        embedded = self.input_projection(signal)
+        # Project + normalize
+        embedded = self.input_projection(tokens)      # [B, T, D]
         embedded = self.input_layernorm(embedded)
 
-        # Add CLS token
+        # Prepend CLS token
         cls_token = self.cls_token.expand(batch_size, 1, -1)
         embedded = torch.cat((cls_token, embedded), dim=1)  # [B, T+1, D]
 
-        # Build padding mask
-        lengths_with_cls = (length + 1).clamp_max(seq_len_plus_cls)
-        padding_mask = torch.arange(seq_len_plus_cls, device=signal.device).expand(batch_size, -1) >= lengths_with_cls.unsqueeze(1)
+        # Padding mask
+        lengths_with_cls = (token_length + 1).clamp_max(seq_len_plus_cls)
+        padding_mask = (
+            torch.arange(seq_len_plus_cls, device=signal.device)
+            .expand(batch_size, -1) >= lengths_with_cls.unsqueeze(1)
+        )
 
-        # Add positional encodings (excluding CLS)
+        # Positional encodings (non-CLS positions only)
         abs_pe = self.positional_encoding(seq_len).to(embedded.device)  # [1, T, D]
         embedded[:, 1:] += abs_pe * (~padding_mask[:, 1:]).unsqueeze(-1)
 
-        # Wipe padded slots completely
+        # Zero out padded slots
         embedded[padding_mask] = 0.0
-        
-        return embedded, padding_mask
 
-    def forward(self, 
-                signal: torch.Tensor,
-                length: torch.Tensor,
-                tasks: Optional[Iterable[Task]] = None):
+        return embedded, padding_mask, token_length
+
+    # ----------------------------------------------------------------------
+    # Forward
+    # ----------------------------------------------------------------------
+
+    def forward(
+        self,
+        signal: torch.Tensor,
+        length: torch.Tensor,
+        tasks: Optional[Iterable[Task]] = None,
+    ):
         """
-        signal: Tensor of shape [batch_size, seq_len, input_dim]
-        lengths: Tensor of shape [batch_size], unpadded lengths
-        tasks: tasks at runtime
+        Args:
+            signal: [B, N] raw signal  OR  [B, T, chunk_size] legacy
+            length: [B]
+                    - raw pipeline:    number of valid raw samples
+                    - legacy pipeline: number of valid tokens
+            tasks:  subset of enabled_tasks to run; None = all enabled
         """
-        # Which tasks to run this call
         if tasks is None:
             tasks = self.enabled_tasks
         tasks = set(tasks)
 
         missing = tasks - self.enabled_tasks
         if missing:
-            raise ValueError(f"Requested tasks not enabled in this model: {sorted(missing)}")
-        
-        embedded, padding_mask = self._prep_embeddings_and_mask(signal, length)
-    
-        # Transformer encoder
+            raise ValueError(
+                f"Requested tasks not enabled in this model: {sorted(missing)}"
+            )
+
+        embedded, padding_mask, _ = self._prep_embeddings_and_mask(signal, length)
         encoded = self.encoder(embedded, key_padding_mask=padding_mask)  # [B, T+1, D]
 
-
         out = {}
+
         if "classification" in tasks:
-            cls_rep = encoded[:, 0]  # [B, D]
+            cls_rep = encoded[:, 0]
             out["classification"] = self.classifier(cls_rep)
 
         if "segmentation" in tasks:
-            tok_rep = encoded[:, 1:]  # [B, T, D]
+            tok_rep = encoded[:, 1:]
             out["segmentation"] = self.token_classifier(tok_rep)
-            
+
         if "fragmentation" in tasks:
-            cls_rep = encoded[:, 0]  # [B, D]
-            tok_rep = encoded[:, 1:]  # [B, T, D]
-            valid = (~padding_mask[:, 1:]).unsqueeze(-1)         # [B, T, 1]
-            summed = (tok_rep * valid).sum(dim=1)                # [B, D]
-            denom = valid.sum(dim=1).clamp_min(1.0)              # [B, 1]
-            mean_pooled = summed / denom                         # [B, D]
-            frag_rep = torch.cat([cls_rep, mean_pooled], dim=1)  # [B, 2D]
+            cls_rep = encoded[:, 0]
+            tok_rep = encoded[:, 1:]
+            valid = (~padding_mask[:, 1:]).unsqueeze(-1)
+            summed = (tok_rep * valid).sum(dim=1)
+            denom = valid.sum(dim=1).clamp_min(1.0)
+            mean_pooled = summed / denom
+            frag_rep = torch.cat([cls_rep, mean_pooled], dim=1)
             out["fragmentation"] = self.frag_classifier(frag_rep)
 
         return out
-    
+
+    # ----------------------------------------------------------------------
+    # Interpretability
+    # ----------------------------------------------------------------------
+
     @torch.no_grad()
-    def get_cls_attention(self, signal: torch.Tensor, length: torch.Tensor, average_heads: bool = True):
-        """
-        Uses attention weights from the LAST encoder layer.
-
-        Returns:
-        cls_attn:      [B, H, T] attention probabilities from CLS -> tokens (pads = 0)
-        cls_attn_mean: [B, T]    head-averaged attention (if average_heads)
-        """
+    def get_cls_attention(
+        self,
+        signal: torch.Tensor,
+        length: torch.Tensor,
+        average_heads: bool = True,
+    ):
         self.eval()
-        embedded, padding_mask = self._prep_embeddings_and_mask(signal, length)  # [B, L, D], [B, L]
-        encoded, attn_all = self.encoder(embedded, key_padding_mask=padding_mask, return_attn=True)
+        embedded, padding_mask, _ = self._prep_embeddings_and_mask(signal, length)
+        encoded, attn_all = self.encoder(
+            embedded, key_padding_mask=padding_mask, return_attn=True
+        )
 
-        last_attn = attn_all[-1]  # expected [B, H, L, L]
+        last_attn = attn_all[-1]
         if last_attn.dim() == 3:
-            # If encoder returns averaged weights [B, L, L], expand to [B, 1, L, L]
             last_attn = last_attn.unsqueeze(1)
 
-        # CLS is position 0
-        cls_attn = last_attn[:, :, 0, 1:]  # [B, H, T]
-
-        token_pad = padding_mask[:, 1:]  # [B, T], True=pad
+        cls_attn = last_attn[:, :, 0, 1:]          # [B, H, T]
+        token_pad = padding_mask[:, 1:]
         if token_pad.any():
             cls_attn = cls_attn.masked_fill(token_pad.unsqueeze(1), 0.0)
 
@@ -195,43 +269,29 @@ class tRNAZAPFormer(nn.Module):
         length: torch.Tensor,
         target_class: torch.Tensor | int | None = None,
         use_abs: bool = True,
-        reduce: str = "l2",          # "l2" or "sum"
+        reduce: str = "l2",
         normalize: bool = True,
     ):
-        """
-        Gradient-based saliency for the classification output w.r.t. the *input signal*.
-
-        Args:
-          signal: [B, T, Din]
-          length: [B]
-          target_class:
-            - None: uses argmax class per example
-            - int: uses the same class for all examples
-            - Tensor [B]: per-example class indices
-          use_abs: take abs of gradients before reduction
-          reduce: reduce gradient across feature dim -> token score ("l2" or "sum")
-          normalize: normalize saliency per example to sum to 1 over non-pad tokens
-
-        Returns:
-          saliency: [B, T] (pads = 0)
-          chosen_class: [B] target class indices used
-        """
         if self.classifier is None:
-            raise RuntimeError("get_token_saliency requires 'classification' to be enabled in this model instance.")
+            raise RuntimeError(
+                "get_token_saliency requires 'classification' to be enabled."
+            )
 
         self.eval()
 
-        # Ensure we can take gradients w.r.t. the input
         x = signal.detach().clone()
         x.requires_grad_(True)
 
         out = self.forward(x, length, tasks=("classification",))
-        logits = out["classification"]  # [B, C]
-        B, T, _ = x.shape
+        logits = out["classification"]
+        B = x.shape[0]
 
-        # Determine target class indices
+        is_legacy = signal.dim() == 3
+        token_length = self._raw_length_to_tokens(length, is_legacy)
+        T = self._encode_signal(x.detach()).shape[1]
+
         if target_class is None:
-            chosen = logits.argmax(dim=-1)  # [B]
+            chosen = logits.argmax(dim=-1)
         elif isinstance(target_class, int):
             chosen = torch.full((B,), target_class, device=logits.device, dtype=torch.long)
         else:
@@ -239,7 +299,7 @@ class tRNAZAPFormer(nn.Module):
             if chosen.ndim != 1 or chosen.shape[0] != B:
                 raise ValueError("target_class tensor must have shape [B]")
 
-        selected = logits.gather(1, chosen.unsqueeze(1)).squeeze(1)  # [B]
+        selected = logits.gather(1, chosen.unsqueeze(1)).squeeze(1)
         loss = selected.sum()
 
         self.zero_grad(set_to_none=True)
@@ -249,10 +309,17 @@ class tRNAZAPFormer(nn.Module):
 
         g = x.grad
         if g is None:
-            raise RuntimeError("No gradients computed. Ensure signal requires_grad and forward uses it.")
+            raise RuntimeError(
+                "No gradients computed. Ensure signal requires_grad and forward uses it."
+            )
 
         if use_abs:
             g = g.abs()
+
+        if not is_legacy:
+            # Raw signal [B, N]: reshape gradients into [B, T, stride] then reduce
+            stride = self.signal_encoder.effective_stride
+            g = g[:, : T * stride].reshape(B, T, stride)
 
         if reduce == "l2":
             sal = torch.sqrt((g ** 2).sum(dim=-1) + 1e-12)
@@ -261,8 +328,9 @@ class tRNAZAPFormer(nn.Module):
         else:
             raise ValueError("reduce must be 'l2' or 'sum'")
 
-        # Mask pads
-        pad_mask = torch.arange(T, device=signal.device).unsqueeze(0) >= length.unsqueeze(1)  # [B, T]
+        pad_mask = (
+            torch.arange(T, device=signal.device).unsqueeze(0) >= token_length.unsqueeze(1)
+        )
         sal = sal.masked_fill(pad_mask, 0.0)
 
         if normalize:

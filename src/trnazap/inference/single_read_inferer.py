@@ -16,7 +16,7 @@ import tqdm
 
 from .inference_base import InferenceBase
 from ..config.model_config import ModelConfig, ModelLoader
-from ..feeders import SequenceStandardizer, load_signal, collate_fn
+from ..feeders import SequenceStandardizer, collate_fn
 from ..storages import InferenceResults, InferenceMetadata, ReadResult
 from ..utils import PathSet
 from ..io import ZIRWriter, ZIRShardManager
