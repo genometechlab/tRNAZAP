@@ -124,7 +124,7 @@ class ConvSignalEncoder(SignalEncoder):
         for i, (c_in, c_out, k, s) in enumerate(
             zip(channels[:-1], channels[1:], kernel_sizes, strides)
         ):
-            layers.append(nn.Conv1d(c_in, c_out, kernel_size=k, stride=s, bias=False))
+            layers.append(nn.Conv1d(c_in, c_out, kernel_size=k, stride=s, bias=False, padding=k-s))
             layers.append(_TransposedLayerNorm(c_out))  # LN over channel dim
             layers.append(act_fn())
 

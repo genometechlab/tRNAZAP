@@ -95,11 +95,15 @@ class MultiheadAttention(nn.Module):
         Project inputs to Q, K, V using packed in_proj_weight.
         For self-attention query == key == value.
         """
-        W_q, W_k, W_v = self.in_proj_weight.chunk(3, dim=0)
-        b_q, b_k, b_v = self.in_proj_bias.chunk(3, dim=0)
-        Q = F.linear(query, W_q, b_q)
-        K = F.linear(key,   W_k, b_k)
-        V = F.linear(value, W_v, b_v)
+        if query is key and key is value:
+            qkv = F.linear(query, self.in_proj_weight, self.in_proj_bias)
+            Q, K, V = qkv.chunk(3, dim=-1)
+        else:
+            W_q, W_k, W_v = self.in_proj_weight.chunk(3, dim=0)
+            b_q, b_k, b_v = self.in_proj_bias.chunk(3, dim=0)
+            Q = F.linear(query, W_q, b_q)
+            K = F.linear(key, W_k, b_k)
+            V = F.linear(value, W_v, b_v)
         return Q, K, V
 
     def _split_heads(self, x: torch.Tensor) -> torch.Tensor:
@@ -166,8 +170,8 @@ class MultiheadAttention(nn.Module):
                     combined_mask = attn_mask.unsqueeze(1)               # [B,1,T,S]
 
             if key_padding_mask is not None:
-                pad_mask = key_padding_mask[:, None, None, :].expand(B, self.num_heads, T, S)
-                inf_mask = torch.zeros_like(pad_mask, dtype=Q.dtype).masked_fill(pad_mask, float("-inf"))
+                inf_mask = torch.zeros(B, 1, 1, S, dtype=Q.dtype, device=Q.device)
+                inf_mask.masked_fill_(key_padding_mask[:, None, None, :], float("-inf"))
                 combined_mask = inf_mask if combined_mask is None else combined_mask + inf_mask
 
             scores = torch.matmul(Q, K.transpose(-2, -1)) / scale   # [B, H, T, S]
@@ -199,8 +203,8 @@ class MultiheadAttention(nn.Module):
                     combined_mask = attn_mask.unsqueeze(1)
 
             if key_padding_mask is not None:
-                pad_mask = key_padding_mask[:, None, None, :].expand(B, self.num_heads, T, S)
-                inf_mask = torch.zeros_like(pad_mask, dtype=Q.dtype).masked_fill(pad_mask, float("-inf"))
+                inf_mask = torch.zeros(B, 1, 1, S, dtype=Q.dtype, device=Q.device)
+                inf_mask.masked_fill_(key_padding_mask[:, None, None, :], float("-inf"))
                 combined_mask = inf_mask if combined_mask is None else combined_mask + inf_mask
 
             out = F.scaled_dot_product_attention(

@@ -22,6 +22,7 @@ class tRNAZAPFormer(nn.Module):
         hidden_size: int = 256,
         num_heads: int = 4,
         dim_feedforward: int = 512,
+        norm_first: bool = False,
         num_layers: int = 4,
         dropout_rate_transformer: float = 0.2,
         dropout_rate_fc: float = 0.2,
@@ -93,9 +94,9 @@ class tRNAZAPFormer(nn.Module):
             dim_feedforward,
             num_layers,
             dropout_rate_transformer,
-            norm_first=False,
+            norm_first=norm_first,
             use_rope=use_rope,
-            max_seq_len=max_seq_len,
+            max_seq_len=max_seq_len+1,
         )
 
         # ------------------------------------------------------------------

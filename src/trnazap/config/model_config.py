@@ -35,6 +35,7 @@ class ModelConfig:
     num_layers: int
     hidden_size: int
     dim_feedforward: int
+    norm_first: bool
     dropout: float
 
     # -----------------------------------------------------------------------
@@ -266,6 +267,7 @@ class ModelLoader:
             num_layers=self.config.num_layers,
             hidden_size=self.config.hidden_size,
             dim_feedforward=self.config.dim_feedforward,
+            norm_first=self.config.norm_first,
             # Positional encoding
             positional_encoding_type=self.config.positional_encoding_type,
         )
