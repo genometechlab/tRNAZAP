@@ -220,9 +220,10 @@ def zap_label(bam, ref, out, decoder_dict):
         ref_lens[tRNA.name] = len(tRNA.sequence)
         ref_seqs[tRNA.name] = tRNA.sequence
         tRNA_labels[tRNA.name] = i + 3
-        
-    with open(decoder_dict, 'rb') as infile:
-        decoder_dict = pickle.load(infile)
+
+    if decoder_dict is not None:
+        with open(decoder_dict, 'rb') as infile:
+            decoder_dict = pickle.load(infile)
 
     out_dict = {}
     for read in tqdm(af.fetch()):
@@ -249,17 +250,18 @@ def zap_label(bam, ref, out, decoder_dict):
             continue
 
         ref_name_tmp = read.reference_name
-        
-        if 'mito' not in read.reference_name:
-            split_ref = read.reference_name.split('_')[-1].split('-')
-            assert len(split_ref) == 5
-            encoder = f"{split_ref[1]}-{split_ref[2]}"
-            decoder = f"{split_ref[3]}-{split_ref[4]}"
-            if encoder in decoder_dict:
-                dis_amb_result = disambiguate(read, decoder_dict[encoder])
-                if dis_amb_result is None:
-                    continue
-                ref_name_tmp = '-'.join(ref_name_tmp.split('-')[:-2]) + '-' + dis_amb_result
+
+        if decoder_dict is not None:
+            if 'mito' not in read.reference_name:
+                split_ref = read.reference_name.split('_')[-1].split('-')
+                assert len(split_ref) == 5
+                encoder = f"{split_ref[1]}-{split_ref[2]}"
+                decoder = f"{split_ref[3]}-{split_ref[4]}"
+                if encoder in decoder_dict:
+                    dis_amb_result = disambiguate(read, decoder_dict[encoder])
+                    if dis_amb_result is None:
+                        continue
+                    ref_name_tmp = '-'.join(ref_name_tmp.split('-')[:-2]) + '-' + dis_amb_result
         
         count_dict[ref_name_tmp] += 1
         out_dict[read.query_name] = annot_from_read(ref_positions, 
@@ -284,7 +286,7 @@ if __name__ == "__main__":
     parser.add_argument("--bam", required=True, help="Aligned tRNA file")
     parser.add_argument("--ref", required=True, help="Reference (should be long splints)")
     parser.add_argument("--out", required=True, help="Outpath")
-    parser.add_argument("--decoder_dict", required=True, help="Decoder disambiguation dict")
+    parser.add_argument("--decoder_dict", required=False, default = None, help="Decoder disambiguation dict, if this is not provided it is assumed all reads belong to their primary aligned class")
 
     args = parser.parse_known_args()[0]
     zap_label(args.bam,
