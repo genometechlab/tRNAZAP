@@ -208,7 +208,7 @@ def disambiguate(read, tRNA_class_entry):
         else:
             return match_key    
 
-def zap_label(bam, ref, out, decoder_dict):
+def zap_label(bam, ref, out, decoder_dict, min_ident):
     ref_lens = {}
     ref_seqs = {}
     tRNA_labels = {}
@@ -246,7 +246,7 @@ def zap_label(bam, ref, out, decoder_dict):
 
         matches, mismatches, insertions, deletions = check_identity(read, ref_seqs[read.reference_name], read.reference_start, read.reference_end)
 
-        if matches / (matches + mismatches + insertions + deletions) < 0.75:
+        if matches / (matches + mismatches + insertions + deletions) < min_ident:
             continue
 
         ref_name_tmp = read.reference_name
