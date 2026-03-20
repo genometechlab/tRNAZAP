@@ -279,18 +279,3 @@ def zap_label(bam, ref, out, decoder_dict, min_ident):
 
     for key, value in count_dict.items():
         print(f"{key}: {value}")
-
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--bam", required=True, help="Aligned tRNA file")
-    parser.add_argument("--ref", required=True, help="Reference (should be long splints)")
-    parser.add_argument("--out", required=True, help="Outpath")
-    parser.add_argument("--decoder_dict", required=False, default = None, help="Decoder disambiguation dict, if this is not provided it is assumed all reads belong to their primary aligned class")
-
-    args = parser.parse_known_args()[0]
-    zap_label(args.bam,
-              args.ref,
-              args.out,
-              args.decoder_dict
-              )
