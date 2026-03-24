@@ -208,7 +208,7 @@ def disambiguate(read, tRNA_class_entry):
         else:
             return match_key    
 
-def zap_label(bam, ref, out, decoder_dict):
+def zap_label(bam, ref, out, decoder_dict, min_ident):
     ref_lens = {}
     ref_seqs = {}
     tRNA_labels = {}
@@ -220,9 +220,10 @@ def zap_label(bam, ref, out, decoder_dict):
         ref_lens[tRNA.name] = len(tRNA.sequence)
         ref_seqs[tRNA.name] = tRNA.sequence
         tRNA_labels[tRNA.name] = i + 3
-        
-    with open(decoder_dict, 'rb') as infile:
-        decoder_dict = pickle.load(infile)
+
+    if decoder_dict is not None:
+        with open(decoder_dict, 'rb') as infile:
+            decoder_dict = pickle.load(infile)
 
     out_dict = {}
     for read in tqdm(af.fetch()):
@@ -245,21 +246,22 @@ def zap_label(bam, ref, out, decoder_dict):
 
         matches, mismatches, insertions, deletions = check_identity(read, ref_seqs[read.reference_name], read.reference_start, read.reference_end)
 
-        if matches / (matches + mismatches + insertions + deletions) < 0.75:
+        if matches / (matches + mismatches + insertions + deletions) < min_ident:
             continue
 
         ref_name_tmp = read.reference_name
-        
-        if 'mito' not in read.reference_name:
-            split_ref = read.reference_name.split('_')[-1].split('-')
-            assert len(split_ref) == 5
-            encoder = f"{split_ref[1]}-{split_ref[2]}"
-            decoder = f"{split_ref[3]}-{split_ref[4]}"
-            if encoder in decoder_dict:
-                dis_amb_result = disambiguate(read, decoder_dict[encoder])
-                if dis_amb_result is None:
-                    continue
-                ref_name_tmp = '-'.join(ref_name_tmp.split('-')[:-2]) + '-' + dis_amb_result
+
+        if decoder_dict is not None:
+            if 'mito' not in read.reference_name:
+                split_ref = read.reference_name.split('_')[-1].split('-')
+                assert len(split_ref) == 5
+                encoder = f"{split_ref[1]}-{split_ref[2]}"
+                decoder = f"{split_ref[3]}-{split_ref[4]}"
+                if encoder in decoder_dict:
+                    dis_amb_result = disambiguate(read, decoder_dict[encoder])
+                    if dis_amb_result is None:
+                        continue
+                    ref_name_tmp = '-'.join(ref_name_tmp.split('-')[:-2]) + '-' + dis_amb_result
         
         count_dict[ref_name_tmp] += 1
         out_dict[read.query_name] = annot_from_read(ref_positions, 
@@ -277,18 +279,3 @@ def zap_label(bam, ref, out, decoder_dict):
 
     for key, value in count_dict.items():
         print(f"{key}: {value}")
-
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--bam", required=True, help="Aligned tRNA file")
-    parser.add_argument("--ref", required=True, help="Reference (should be long splints)")
-    parser.add_argument("--out", required=True, help="Outpath")
-    parser.add_argument("--decoder_dict", required=True, help="Decoder disambiguation dict")
-
-    args = parser.parse_known_args()[0]
-    zap_label(args.bam,
-              args.ref,
-              args.out,
-              args.decoder_dict
-              )
