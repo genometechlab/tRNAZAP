@@ -428,9 +428,21 @@ class ZIRReader:
             raise EOFError("Unexpected EOF while reading metadata length")
         meta_len = struct.unpack("<I", ml_b)[0]
         meta = json.loads(f.read(meta_len).decode("utf-8"))
+        meta = self._validate_meta(meta)
 
         f.seek(HEADER_SIZE)
         return meta, record_count
+    
+    def _validate_meta(self, data: dict) -> dict:
+        """Migrate metadata dict from old schema to new schema."""
+        key_mapping = {
+            "num_classes": "num_classification_classes",
+            "num_classes_seq2seq": "num_segmentation_classes",
+        }
+        for old_key, new_key in key_mapping.items():
+            if old_key in data and new_key not in data:
+                data[new_key] = data.pop(old_key)
+        return data
 
     def _check_metadata_compatibility(self, metas: List[Dict[str, Any]]) -> None:
         ref = metas[0]
