@@ -1,10 +1,13 @@
 import pysam
 import numpy as np
-from numba import njit, jit
+from numba import njit
 import pickle
 from tqdm import tqdm
-import argparse
 from collections import defaultdict
+
+FIVE_PRIME_ADAPTER_LEN = 36   # 5' ligation oligo length
+THREE_PRIME_ADAPTER_LEN = 41  # 3' ligation oligo length
+MIN_TRNA_COVERAGE = 15        # minimum tRNA region coverage to process a read
 
 
 @njit
@@ -33,21 +36,21 @@ def annot_from_read(ref_pos, ref_len, tRNA_code, mv_table, ts, ref_start, ref_en
             elif past_ref_end:
                 # Past ref_end - 3' softclip
                 x_label[i] = 1
-            elif prev_pos < 36:
+            elif prev_pos < FIVE_PRIME_ADAPTER_LEN:
                 x_label[i] = 2
-            elif prev_pos > ref_len - 41:
+            elif prev_pos > ref_len - THREE_PRIME_ADAPTER_LEN:
                 # Past ref_end - 3' softclip
                 x_label[i] = 1
-            elif seen_ref_start and not past_ref_end and prev_pos <= ref_len - 41:
+            elif seen_ref_start and not past_ref_end and prev_pos <= ref_len - THREE_PRIME_ADAPTER_LEN:
                 # Between ref_start and ref_end - internal deletion
                 x_label[i] = tRNA_code
             else:
                 assert 1 == 2, f"{ref_pos} : {i} : {ref_pos[i]}"
         else:  # Mapped position
-            if pos < 36:
+            if pos < FIVE_PRIME_ADAPTER_LEN:
                 # 5' adapter region
                 x_label[i] = 2
-            elif past_ref_end or pos > ref_len - 41:
+            elif past_ref_end or pos > ref_len - THREE_PRIME_ADAPTER_LEN:
                 # 3' adapter region
                 x_label[i] = 1
             else:
@@ -116,22 +119,20 @@ def check_identity(read, ref_seq, ref_start, ref_end):
             elif past_ref_end:
                 # Past ref_end - 3' softclip
                 continue
-            elif prev_pos < 36:
+            elif prev_pos < FIVE_PRIME_ADAPTER_LEN:
                 continue
-            elif prev_pos > ref_len - 41:
+            elif prev_pos > ref_len - THREE_PRIME_ADAPTER_LEN:
                 # Past ref_end - 3' softclip
                 continue
-            elif seen_ref_start and not past_ref_end and prev_pos <= ref_len - 41:
+            elif seen_ref_start and not past_ref_end and prev_pos <= ref_len - THREE_PRIME_ADAPTER_LEN:
                 # Between ref_start and ref_end - internal deletion
                 insertions += 1
-            else:
-                assert 1 == 2, f"{ref_pos} : {i} : {ref_pos[i]}"
         else:  # Mapped position
-            if pos < 36:
+            if pos < FIVE_PRIME_ADAPTER_LEN:
                 # 5' adapter region
                 prev_pos = pos
                 continue
-            elif past_ref_end or pos > ref_len - 41:
+            elif past_ref_end or pos > ref_len - THREE_PRIME_ADAPTER_LEN:
                 # 3' adapter region
                 prev_pos = pos
                 continue
@@ -168,7 +169,6 @@ def edit_dist(s1, s2):
     return dp[m][n]
 
 def disambiguate(read, tRNA_class_entry):
-    five_p_offset = 36
     if 'edit_dist' in tRNA_class_entry:
 
         encoded_query_seq = np.array([ord(x) for x in read.query_sequence])
@@ -232,7 +232,7 @@ def zap_label(bam, ref, out, decoder_dict, min_ident):
         if read.is_unmapped or read.mapping_quality == 0 or read.is_secondary or read.is_supplementary or read.has_tag('pi') or read.get_tag('ns') >= 1000000:
             continue
 
-        if abs(max(read.reference_start, 36) - min(read.reference_end, ref_lens[read.reference_name]-41)) < 15:
+        if abs(max(read.reference_start, FIVE_PRIME_ADAPTER_LEN) - min(read.reference_end, ref_lens[read.reference_name] - THREE_PRIME_ADAPTER_LEN)) < MIN_TRNA_COVERAGE:
             continue
         
         ref_positions = np.array(read.get_reference_positions(full_length=True))
@@ -241,7 +241,7 @@ def zap_label(bam, ref, out, decoder_dict, min_ident):
         ref_positions = np.array(ref_positions, dtype=np.int32)
 
         fragment = False
-        if read.reference_start > 36 or read.reference_end < ref_lens[read.reference_name]-41:
+        if read.reference_start > FIVE_PRIME_ADAPTER_LEN or read.reference_end < ref_lens[read.reference_name] - THREE_PRIME_ADAPTER_LEN:
             fragment = True
 
         matches, mismatches, insertions, deletions = check_identity(read, ref_seqs[read.reference_name], read.reference_start, read.reference_end)

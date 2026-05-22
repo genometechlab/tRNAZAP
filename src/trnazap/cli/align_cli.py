@@ -6,9 +6,8 @@ os.environ['OMP_NUM_THREADS'] = '1'
 os.environ['NUMBA_THREADING_LAYER'] = 'omp'
 
 import argparse
+import shutil
 import sys
-from multiprocessing import Pool
-import time
 import numba
 numba.set_num_threads(1)
 
@@ -105,11 +104,10 @@ def register_subparser(subparsers):
         "-m",
         type=str,
         required=False,
-        default="human-mt",
-        choices=["human-mt", "yeast", "e_coli"],
-        help="Target substrate. Currently three models are supported human"
-        + "mitochondrail tRNA (human-mt), yeast tRNA (yeast),"
-        + " and E. Coli tRNA (e_coli).",
+        default="e_coli",
+        choices=["yeast", "e_coli"],
+        help="Target substrate. Currently two models are supported:"
+        + " yeast tRNA (yeast) and E. coli tRNA (e_coli).",
     )
 
     parser.add_argument(
@@ -149,7 +147,12 @@ def register_subparser(subparsers):
 
 def run_align_wrapper(FLAGS):
     """Wrapper to Execute the align subcommand."""
-    
+    if shutil.which("samtools") is None:
+        raise RuntimeError(
+            "samtools not found on PATH. Please install samtools "
+            "(https://www.htslib.org) before running 'trnazap align'."
+        )
+
     run_align(
         FLAGS.unaligned_bam,
         FLAGS.inference,
@@ -229,11 +232,10 @@ if __name__ == "__main__":
         "-m",
         type=str,
         required=False,
-        default="human-mt",
-        choices=["human-mt", "yeast", "e_coli"],
-        help="Target substrate. Currently three models are supported human"
-        + "mitochondrail tRNA (human-mt), yeast tRNA (yeast),"
-        + " and E. Coli tRNA (e_coli).",
+        default="e_coli",
+        choices=["yeast", "e_coli"],
+        help="Target substrate. Currently two models are supported:"
+        + " yeast tRNA (yeast) and E. coli tRNA (e_coli).",
     )
 
     parser.add_argument(

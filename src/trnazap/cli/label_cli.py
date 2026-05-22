@@ -16,18 +16,21 @@ def register_subparser(subparsers):
     parser.add_argument("--out", required=True, help="Outpath")
     parser.add_argument("--ref", required=False, help="Reference")
     parser.add_argument("--decoder", required=False, default=None, help="Decoder")
-    parser.add_argument("--model", choices = ['yeast', 'ecoli'], default = None, required=False, help="Model that labeling is being performed for.")
-    parser.add_argument("--min-ident", required=False, default = 0.9)
+    parser.add_argument("--model", choices = ['yeast', 'e_coli'], default = None, required=False, help="Model that labeling is being performed for.")
+    parser.add_argument("--min-ident", required=False, default=0.9, type=float)
     parser.set_defaults(func=run_label)
 
 
 def run_label(args):
     """Execute the label subcommand."""
+    if args.model is None and args.ref is None:
+        raise ValueError("Either --model or --ref must be provided.")
+
     if args.model is not None:
         decoder_path = files('trnazap').joinpath('label')
         if args.model == 'yeast':
             decoder = decoder_path / "yeast_decoder.pkl"
-        elif args.model == "ecoli":
+        elif args.model == "e_coli":
             decoder = decoder_path / "ecoli_decoder.pkl"
     
         ref_path = files('trnazap').joinpath('references')
@@ -39,7 +42,8 @@ def run_label(args):
         zap_label(args.bam,
                   ref,
                   args.out,
-                  decoder
+                  decoder,
+                  args.min_ident
                   )
 
     else:

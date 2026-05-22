@@ -57,3 +57,7 @@ Thumbs.db
 
 __pycache__/
 preliminary_test_data/
+
+# Claude Code
+.claude/
+CLAUDE.md
