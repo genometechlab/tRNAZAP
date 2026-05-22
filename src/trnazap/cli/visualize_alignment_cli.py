@@ -34,7 +34,8 @@ def register_subparser(subparsers):
 
     parser.add_argument("--threads",
                         "-t",
-                        type=str)
+                        type=int,
+                        default=8)
 
 
     parser.add_argument("--bwa_path",
@@ -52,7 +53,7 @@ def register_subparser(subparsers):
 
     parser.add_argument("--reference",
                         default=None,
-                        help="If a non-standard bwa reference has been used, pass it here. This is not a suggested parameter, it will likely break the script")
+                        help="Path to a custom BWA reference FASTA. Overrides the bundled reference for the selected model. Use only if you have a non-standard reference.")
 
 
     parser.set_defaults(func=run_alignment_visualize)  
@@ -60,24 +61,13 @@ def register_subparser(subparsers):
 def run_alignment_visualize(args):
     from ..visualize.matplotlib_stylesheets.genometechlab_plotting import setup_style
     setup_style()
-    
-    refs = files('trnazap').joinpath('references')
-    if args.model == 'e_coli':
-        bwa_ref = str(refs / 'bwa_align_references' / 'eschColi_K_12_MG1655-mature-tRNAs_bwa_subset.biosplints.fa')
-        zap_ref = str(refs / 'zap_align_references' / 'eschColi_K_12_MG1655-mature-tRNAs_zap_ref.fa')
 
-    if args.model == 'yeast':
-        bwa_ref = str(refs / 'bwa_align_references' / 'sacCer3-mature-tRNAs_bwa_subset_biosplints.fa')
-        zap_ref = str(refs / 'zap_align_references' / 'sacCer3-mature-tRNAs_zap_ref.fa')
-    
     generate_aligner_comparison_figures(
-        #bwa_ref=bwa_ref,
-        #zap_ref=zap_ref,
         reference=args.reference,
         model=args.model,
         bwa_bam=args.bwa_path,
         zap_bam=args.zap_path,
-        threads=int(args.threads),
+        threads=args.threads,
         out_prefix=args.out_prefix,
         out_dir=args.out_dir)
         

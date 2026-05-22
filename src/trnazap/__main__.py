@@ -2,7 +2,8 @@
 
 import argparse
 import sys
-from trnazap.cli import align_cli, infer_cli, infer_multi_cli, label_cli, visualize_alignment_cli, visualize_inference_cli
+from importlib.metadata import version as _pkg_version
+from trnazap.cli import align_cli, infer_cli, infer_multi_cli, label_cli, visualize_alignment_cli, visualize_inference_cli, compare_conditions_cli
 
 
 def main():
@@ -16,7 +17,7 @@ def main():
     parser.add_argument(
         "--version",
         action="version",
-        version="%(prog)s 0.1.0" 
+        version=f"%(prog)s {_pkg_version('trnazap')}"
     )
     
     # Create subparsers for subcommands
@@ -35,6 +36,7 @@ def main():
     label_cli.register_subparser(subparsers)
     visualize_alignment_cli.register_subparser(subparsers)
     visualize_inference_cli.register_subparser(subparsers)
+    compare_conditions_cli.register_subparsers(subparsers)
     
     
     # Parse arguments
