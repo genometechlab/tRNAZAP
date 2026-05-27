@@ -168,14 +168,32 @@ def edit_dist(s1, s2):
             )
     return dp[m][n]
 
+def disambiguate_human_ivt(read, specific_tRNA_entry):
+    #specific tRNA entry is reference position matched w/ expected base, if any fail reject read
+    match_count = 0
+    required_matches = len(specific_tRNA_entry)
+    for pair in read.get_aligned_pairs():
+        if pair[1] is not None and pair[1] in specific_tRNA_entry:
+            if pair[0] is None: #Deletion at required ref_pos
+                return None
+            if read.query_sequence[pair[0]] != specific_tRNA_entry[pair[1]]: #Mismatch
+                return None
+            match_count += 1
+
+    assert match_count <= required_matches
+    if match_count != required_matches:
+        return None
+    return read.reference_name
+
 def disambiguate(read, tRNA_class_entry):
+
     if 'edit_dist' in tRNA_class_entry:
 
         encoded_query_seq = np.array([ord(x) for x in read.query_sequence])
         seq_1_1 = tRNA_class_entry['seq_1-1']
         seq_2_1 = tRNA_class_entry['seq_2-1']
-        seq_1_1_dist = edit_dist(encoded_query_seq, seq_1_1)
-        seq_2_1_dist = edit_dist(encoded_query_seq, seq_2_1)
+        seq_1_1_dist = edit_dist(encoded_query_seq, seq_1_1) / max(len(encoded_query_seq), len(seq_1_1))
+        seq_2_1_dist = edit_dist(encoded_query_seq, seq_2_1) / max(len(encoded_query_seq), len(seq_2_1))
 
         if seq_1_1_dist == seq_2_1_dist:
             return None
@@ -208,7 +226,7 @@ def disambiguate(read, tRNA_class_entry):
         else:
             return match_key    
 
-def zap_label(bam, ref, out, decoder_dict, min_ident):
+def zap_label(bam, ref, out, decoder_dict, min_ident, human_ivt = False):
     ref_lens = {}
     ref_seqs = {}
     tRNA_labels = {}
@@ -252,17 +270,25 @@ def zap_label(bam, ref, out, decoder_dict, min_ident):
         ref_name_tmp = read.reference_name
 
         if decoder_dict is not None:
-            if 'mito' not in read.reference_name:
+            if 'mito' not in read.reference_name and 'Mt_tRNA' not in read.reference_name:
                 split_ref = read.reference_name.split('_')[-1].split('-')
-                assert len(split_ref) == 5
+                assert len(split_ref) == 5 ,f"{read.reference_name}"
                 encoder = f"{split_ref[1]}-{split_ref[2]}"
                 decoder = f"{split_ref[3]}-{split_ref[4]}"
-                if encoder in decoder_dict:
-                    dis_amb_result = disambiguate(read, decoder_dict[encoder])
+                if human_ivt:
+                    targets = decoder_dict[encoder][read.reference_name]
+                    dis_amb_result = disambiguate_human_ivt(read, targets)
                     if dis_amb_result is None:
                         continue
-                    ref_name_tmp = '-'.join(ref_name_tmp.split('-')[:-2]) + '-' + dis_amb_result
-        
+                    ref_name_tmp = read.reference_name
+                    
+                else:
+                    if encoder in decoder_dict:
+                        dis_amb_result = disambiguate(read, decoder_dict[encoder])
+                        if dis_amb_result is None:
+                            continue
+                        ref_name_tmp = '-'.join(ref_name_tmp.split('-')[:-2]) + '-' + dis_amb_result
+
         count_dict[ref_name_tmp] += 1
         out_dict[read.query_name] = annot_from_read(ref_positions, 
                                                     ref_lens[read.reference_name],
