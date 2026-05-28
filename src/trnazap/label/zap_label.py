@@ -270,7 +270,7 @@ def zap_label(bam, ref, out, decoder_dict, min_ident, human_ivt = False):
         ref_name_tmp = read.reference_name
 
         if decoder_dict is not None:
-            if 'His-GTG' in read.reference_name or 'Ile-GAT' in read.reference_name or 'SeC-TCA' in read.reference_name or 'Tyr-ATA' in read.reference_name:
+            if 'His-GTG' in read.reference_name or 'Ile-GAT' in read.reference_name or 'SeC-TCA' in read.reference_name or 'Tyr-ATA' in read.reference_name or "Leu-CAA-5-1" in read.reference_name:
                 continue
             if 'mito' not in read.reference_name and 'Mt_tRNA' not in read.reference_name:
                 split_ref = read.reference_name.split('_')[-1].split('-')
