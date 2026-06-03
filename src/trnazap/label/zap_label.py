@@ -238,6 +238,7 @@ def zap_label(bam, ref, out, decoder_dict, min_ident, human_ivt = False):
         ref_lens[tRNA.name] = len(tRNA.sequence)
         ref_seqs[tRNA.name] = tRNA.sequence
         tRNA_labels[tRNA.name] = i + 3
+        print(f"{tRNA.name} {ref_lens[tRNA.name]}")
 
     if decoder_dict is not None:
         with open(decoder_dict, 'rb') as infile:
