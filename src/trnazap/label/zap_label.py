@@ -270,12 +270,16 @@ def zap_label(bam, ref, out, decoder_dict, min_ident, human_ivt = False):
         ref_name_tmp = read.reference_name
 
         if decoder_dict is not None:
+            gln_ctg = False
             if 'His-GTG' in read.reference_name or 'Ile-GAT' in read.reference_name or 'SeC-TCA' in read.reference_name or 'Tyr-ATA' in read.reference_name or "Leu-CAA-5-1" in read.reference_name:
                 continue
             if 'mito' not in read.reference_name and 'Mt_tRNA' not in read.reference_name:
                 split_ref = read.reference_name.split('_')[-1].split('-')
                 assert len(split_ref) == 5 ,f"{read.reference_name}"
                 encoder = f"{split_ref[1]}-{split_ref[2]}"
+                if encoder == "Gln-CTG":
+                    gln_ctg = True
+                    encoder = "Gln-TTG"
                 decoder = f"{split_ref[3]}-{split_ref[4]}"
                 if human_ivt:
                     targets = decoder_dict[encoder][read.reference_name]
@@ -290,7 +294,9 @@ def zap_label(bam, ref, out, decoder_dict, min_ident, human_ivt = False):
                         if dis_amb_result is None:
                             continue
                         ref_name_tmp = '-'.join(ref_name_tmp.split('-')[:-2]) + '-' + dis_amb_result
-
+                        if gln_ctg and dis_amb_result == "Gln-CTG-1-1":
+                            ref_name_tmp = '-'.join(ref_name_tmp.split('-')[0], dis_amb_result)
+        
         count_dict[ref_name_tmp] += 1
         out_dict[read.query_name] = annot_from_read(ref_positions, 
                                                     ref_lens[read.reference_name],
