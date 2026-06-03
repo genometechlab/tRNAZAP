@@ -295,7 +295,7 @@ def zap_label(bam, ref, out, decoder_dict, min_ident, human_ivt = False):
                             continue
                         ref_name_tmp = '-'.join(ref_name_tmp.split('-')[:-2]) + '-' + dis_amb_result
                         if gln_ctg and dis_amb_result == "Gln-CTG-1-1":
-                            ref_name_tmp = '-'.join(ref_name_tmp.split('-')[0], dis_amb_result)
+                            ref_name_tmp = '-'.join([ref_name_tmp.split('-')[0], dis_amb_result])
         
         count_dict[ref_name_tmp] += 1
         out_dict[read.query_name] = annot_from_read(ref_positions, 
