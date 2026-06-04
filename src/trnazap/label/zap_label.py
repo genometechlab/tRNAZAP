@@ -295,7 +295,7 @@ def zap_label(bam, ref, out, decoder_dict, min_ident, human_ivt = False):
                         if dis_amb_result is None:
                             continue
                         ref_name_tmp = '-'.join(ref_name_tmp.split('-')[:-2]) + '-' + dis_amb_result
-                        if gln_ctg and dis_amb_result == "Gln-CTG-1-1":
+                        if dis_amb_result == "Gln-CTG-1-1":
                             ref_name_tmp = '-'.join([ref_name_tmp.split('-')[0], dis_amb_result])
                         if gln_ctg and dis_amb_result in set(["2-1", "1-1", "3-1"]):
                             encoder = "Gln-TTG"
