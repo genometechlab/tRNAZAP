@@ -11,6 +11,7 @@ import importlib
 
 from pathlib import Path
 from ..utils import load_weights
+from .default_configs import AVAILABLE_CONFIGS, resolve_named_config
 
 
 PathLike = Union[str, Path]
@@ -181,7 +182,7 @@ class ModelConfig:
 
     # -----------------------------------------------------------------------
     # Loaders
-    # -----------------------------------------------------------------------
+    # -----------------------------------------------------------------------    
     @classmethod
     def from_yaml(cls, yaml_path: PathLike) -> "ModelConfig":
         yaml_path = Path(yaml_path).resolve()
@@ -212,6 +213,8 @@ class ModelConfig:
         if isinstance(cfg, cls):
             return cfg
         if isinstance(cfg, str):
+            if cfg in AVAILABLE_CONFIGS:
+                cfg = resolve_named_config(name=cfg)
             cfg_path = Path(cfg)
             suffix = cfg_path.suffix.lower()
             if suffix in {".yaml", ".yml"}:
