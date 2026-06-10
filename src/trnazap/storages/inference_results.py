@@ -2,24 +2,44 @@
 InferenceResults class for storing all inference results with metadata.
 """
 
-from typing import Dict, List, Optional, Iterator, Tuple, Union, Any
+from typing import Dict, List, Optional, Iterator, Union, Any, ItemsView, ValuesView, Protocol, runtime_checkable
 from pathlib import Path
 from dataclasses import dataclass, field
-import pickle
-import numpy as np
 import logging
 
-import h5py
-import json
-
-from .read_results import ReadResult, ReadResultCompressed
+from .read_results import ReadResultDetailed, ReadResult, ReadResultLike
 from .inference_metadata import InferenceMetadata
 from ..utils import PathSet
-from ..io import ZIRWriter, ZIRShardManager
-
-ReadResultUnion = Union["ReadResult", "ReadResultCompressed"]
 
 logger = logging.getLogger(__name__)
+
+# =============================================================================
+# InferenceStore Container
+# =============================================================================
+
+@runtime_checkable
+class InferenceStore(Protocol):
+    """A metadata-bearing, iterable collection of read results (memory- or disk-backed).
+ 
+    Iterating a store yields read objects (ReadResultLike), not IDs — use ``read_ids``
+    for the identifiers. ``get`` returns None on a missing key (it does not raise).
+    """
+ 
+    @property
+    def metadata(self) -> "InferenceMetadata": ...
+ 
+    @property
+    def read_ids(self) -> List[str]: ...
+ 
+    def __len__(self) -> int: ...
+ 
+    def __contains__(self, read_id: str) -> bool: ...
+ 
+    def __iter__(self) -> Iterator["ReadResultLike"]: ...
+ 
+    def reads(self) -> Iterator["ReadResultLike"]: ...
+ 
+    def get(self, read_id: str) -> Optional["ReadResultLike"]: ...
 
 # =============================================================================
 # InferenceResults Container
@@ -27,26 +47,37 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class InferenceResults:
-    """Container for all inference results with metadata."""
+    """In-memory inference store: metadata plus a collection of reads.
+
+    Satisfies the InferenceStore protocol (storages.inference_store), so it is
+    interchangeable with ZIRReader anywhere a store is expected.
+
+    The container may hold either ReadResultDetailed or ReadResult objects, so it
+    is typed against ReadResultLike (their shared interface). Accessing an item
+    autocompletes the shared members; narrow with isinstance(x, ReadResultDetailed)
+    to use detailed-only members such as segmentation_logits / probs.
+
+    Iterating yields read objects (not IDs); use read_ids / keys() for identifiers.
+    """
 
     metadata: InferenceMetadata
-    _results: Dict[str, ReadResult] = field(default_factory=dict)
+    _results: Dict[str, ReadResultLike] = field(default_factory=dict)
 
     # -------------------------------------------------------------------------
     # Core Methods
     # -------------------------------------------------------------------------
 
-    def add_result(self, read_result: ReadResultUnion) -> None:
+    def add_result(self, read_result: ReadResultLike) -> None:
         """
-        Add a ReadResult object.
+        Add a read result (detailed or compressed).
 
         Args:
-            read_result: ReadResult object to add
+            read_result: ReadResultDetailed or ReadResult object to add
         """
         self._results[read_result.read_id] = read_result
-        self.metadata.num_reads_processed = len(self._results) 
+        self.metadata.num_reads_processed = len(self._results)
 
-    def get(self, read_id: str) -> Optional[ReadResultUnion]:
+    def get(self, read_id: str) -> Optional[ReadResultLike]:
         """
         Get result for a specific read.
 
@@ -54,7 +85,8 @@ class InferenceResults:
             read_id: Read identifier
 
         Returns:
-            ReadResult if found, None otherwise
+            The stored read result if found, None otherwise. Narrow with
+            isinstance(..., ReadResultDetailed) for detailed-only members.
         """
         return self._results.get(read_id)
 
@@ -78,7 +110,7 @@ class InferenceResults:
     # Iterators and Access
     # -------------------------------------------------------------------------
 
-    def __getitem__(self, read_id: str) -> ReadResult:
+    def __getitem__(self, read_id: str) -> ReadResultLike:
         """Get result using bracket notation."""
         if read_id not in self._results:
             raise KeyError(f"No results found for read_id: {read_id}")
@@ -92,19 +124,32 @@ class InferenceResults:
         """Get number of reads in results."""
         return len(self._results)
 
-    def __iter__(self) -> Iterator[str]:
-        """Iterate over read IDs."""
+    def __iter__(self) -> Iterator[ReadResultLike]:
+        """Iterate over read objects (InferenceStore protocol).
+
+        NOTE: yields the result objects, not read IDs. This matches ZIRReader and
+        lets the same loop drive both backends. Use read_ids / keys() for IDs.
+        (Consequence: `for x in results` differs from `x in results`, which is
+        keyed on read_id — same asymmetry Python tolerates elsewhere.)
+        """
         return iter(self._results.values())
-    
+
+    def reads(self) -> Iterator[ReadResultLike]:
+        """Iterate over read objects (InferenceStore protocol; mirror of ZIRReader.reads)."""
+        return iter(self._results.values())
+
     def __bool__(self) -> bool:
+        # Always truthy: a constructed container is considered "present" even when
+        # empty, so `if results:` does not collapse to False on a valid empty run.
+        # (Use `len(results)` to test for emptiness.)
         return True
 
-    def items(self) -> Iterator[Tuple[str, ReadResult]]:
-        """Iterate over (read_id, ReadResult) pairs."""
+    def items(self) -> ItemsView[str, ReadResultLike]:
+        """Iterate over (read_id, result) pairs."""
         return self._results.items()
 
-    def values(self) -> Iterator[ReadResult]:
-        """Iterate over ReadResult objects."""
+    def values(self) -> ValuesView[ReadResultLike]:
+        """Iterate over result objects."""
         return self._results.values()
 
     def keys(self) -> List[str]:
@@ -114,24 +159,15 @@ class InferenceResults:
     # -------------------------------------------------------------------------
     # I/O Methods
     # -------------------------------------------------------------------------
-    
+
     def save_zir(self, path: Union[str, Path], shard_size: Optional[int] = None) -> Path:
-        """Save results to ZIR format."""
-        path = Path(path)
-        
-        if shard_size is None:
-            # Single file
-            with ZIRWriter(path, self.metadata) as writer:
-                for result in self._results.values():
-                    writer.add_result(result)
-            return path
-        else:
-            # Sharded
-            manager = ZIRShardManager(path, self.metadata, shard_size)
-            for result in self._results.values():
-                manager.add_result(result)
-            manager.close()
-            return path.parent
+        """Save results to ZIR format.
+
+        Delegates to io.write_zir, which accepts any InferenceStore — so the same
+        serialization path is shared with disk-to-disk rewrites of a ZIRReader.
+        """
+        from ..io import write_zir
+        return write_zir(self, path, shard_size=shard_size)
 
     # -------------------------------------------------------------------------
     # Utility
@@ -179,12 +215,12 @@ class InferenceResults:
                 if read_id in merged:
                     logger.warning(f"Duplicate read_id '{read_id}' skipped during merge.")
                     continue
-                merged._add_result(read_result.copy())
+                merged.add_result(read_result.copy())
 
         merged.metadata.pod5_paths = merged_pod5_pths.to_list()
 
         return merged
-    
+
     def __add__(self, other: "InferenceResults"):
         return self.merge(self, other)
 

@@ -1,7 +1,9 @@
+from __future__ import annotations
 import struct
 import json
 import os
 import io
+import glob
 from pathlib import Path
 from typing import Union, List, Collection, Set, Tuple, Optional, Iterator, Generator, Iterable, Dict, Any, TYPE_CHECKING
 import numpy as np
@@ -14,9 +16,7 @@ from .archive_format import MAGIC_BYTES, FORMAT_VERSION, HEADER_SIZE, RECORD_MAR
 from ..utils import search_path
 
 if TYPE_CHECKING:
-    from ..storages import InferenceMetadata, InferenceResults, ReadResult, ReadResultCompressed
-    
-ReadResultUnion = Union["ReadResult", "ReadResultCompressed"]
+    from ..storages import InferenceMetadata, InferenceResults, ReadResultDetailed, ReadResult, ReadResultLike
 
 logger = logging.getLogger(__name__)
 PathLike = Union[str, Path, os.PathLike]
@@ -35,6 +35,11 @@ def _default_search_path(base: Path, *, recursive: bool, patterns: List[str]) ->
 
 class ZIRReader:
     """High-performance ZIR archive reader with dynamic logits and selection-aware fast paths.
+
+    Satisfies the InferenceStore protocol (storages.inference_store): it exposes
+    metadata, read_ids, __len__, __contains__, __iter__ (yields reads), reads(), and
+    get(). It is therefore interchangeable with InferenceResults anywhere a store is
+    expected, including io.write_zir for disk-to-disk re-sharding.
 
     Design goals:
     - Buffered I/O on open files
@@ -67,6 +72,17 @@ class ZIRReader:
         if isinstance(paths, (str, os.PathLike, Path)):
             paths = [paths]
         for p in paths:
+            p_str = os.fspath(p)
+
+            # Shell-style glob patterns ("*.zir", "data/*.zir", "data/**/*.zir")
+            if glob.has_magic(p_str):
+                matched = [Path(m) for m in glob.glob(p_str, recursive=True)]
+                zir = [m for m in matched if m.is_file() and m.suffix == ".zir"]
+                if not zir:
+                    logger.warning("Glob pattern %r matched no .zir files", p_str)
+                p_list.extend(zir)
+                continue
+
             p = Path(p)
             if p.is_dir():
                 try:
@@ -77,6 +93,9 @@ class ZIRReader:
                 p_list.extend(Path(x) for x in found)
             elif p.is_file() and p.suffix == ".zir":
                 p_list.append(p)
+            else:
+                logger.warning("Path %r is neither a .zir file nor a directory; skipped", p_str)
+
         self._paths = sorted(set(p_list))
         if not self._paths:
             raise ValueError("No ZIR file was found")
@@ -131,11 +150,11 @@ class ZIRReader:
     def __len__(self) -> int:
         return self.record_count
 
-    def __iter__(self) -> Generator[ReadResultUnion, None, None]:
+    def __iter__(self) -> Generator[ReadResultLike, None, None]:
         return self.reads()
 
     # ---------------- Public API ---------------- #
-    def reads(self, selection: Optional[Set[str]] = None) -> Generator[ReadResultUnion, None, None]:
+    def reads(self, selection: Optional[Set[str]] = None) -> Generator[ReadResultLike, None, None]:
         """Iterate reads; if *selection* provided, use fast path to avoid full decompress.
 
         Args:
@@ -191,6 +210,8 @@ class ZIRReader:
         index: Dict[str, Dict[str, Any]] = {}
 
         def index_one(file_idx: int, path: Path, expected: int) -> Dict[str, Dict[str, Any]]:
+            # Build only a LOCAL dict; the caller merges. Workers must not touch the
+            # shared `index` (that was a data race).
             local: Dict[str, Dict[str, Any]] = {}
             with open(path, "rb", buffering=0) as raw:
                 f = io.BufferedReader(raw, buffer_size=1 << 20)
@@ -221,19 +242,16 @@ class ZIRReader:
                     else:
                         rid = prev[2:end].decode("utf-8")
                     local[rid] = {"file_idx": file_idx, "offset": pos, "record_size": len(head) + csize}
-            # merge
-            index.update(local)
             return local
 
         with ThreadPoolExecutor(max_workers=min(threads, max(1, len(self._paths)))) as ex:
             futs = [ex.submit(index_one, i, p, rc) for i, (p, rc) in enumerate(zip(self._paths, self.record_counts))]
             for fu in futs:
-                fu.result()
-                index.update(fu.result())
+                index.update(fu.result())  # consume each future once; merge in main thread
 
         self._index = index
 
-    def get_read(self, read_id: str) -> ReadResultUnion:
+    def get_read(self, read_id: str) -> ReadResultLike:
         if self._index is None:
             self.build_index()
         assert self._index is not None
@@ -250,6 +268,17 @@ class ZIRReader:
         comp = f.read(csize)
         data = self.decompressors[info["file_idx"]].decompress(comp, max_output_size=self._S_U32.unpack_from(header, len(RECORD_MARKER)+4)[0])
         return self._parse_record(data)
+
+    def get(self, read_id: str) -> Optional[ReadResultLike]:
+        """Return the read if present, else None (InferenceStore protocol).
+
+        Mirrors InferenceResults.get: missing keys yield None rather than raising,
+        unlike get_read which raises KeyError.
+        """
+        try:
+            return self.get_read(read_id)
+        except KeyError:
+            return None
 
     def get_path(self, read_id: str) -> Path:
         if self._index is None:
@@ -276,10 +305,11 @@ class ZIRReader:
         return InferenceMetadata(**self.metadata_dict.copy())
 
     def to_inference_results(self) -> "InferenceResults":
-        from ..storages import InferenceResults, InferenceMetadata, ReadResult, ReadResultCompressed  # type: ignore
+        from ..storages import InferenceResults, InferenceMetadata  # type: ignore
         meta = self.metadata_dict.copy()
-        if meta.get("pod5_paths"):
-            meta["pod5_paths"] = set(meta["pod5_paths"])  # restore set if writer serialized it
+        # pod5_paths stays a list to match InferenceMetadata.pod5_paths (Optional[List[str]])
+        # and the writer's header serialization. Do NOT convert back to a set here, or
+        # the round-trip type would disagree with the dataclass and with reader.metadata.
         md = InferenceMetadata(**meta)
         res = InferenceResults(metadata=md)
         for r in self.reads():
@@ -308,7 +338,7 @@ class ZIRReader:
             )
         return data
 
-    def _parse_record(self, data: bytes) -> ReadResultUnion:
+    def _parse_record(self, data: bytes) -> ReadResultLike:
         view = memoryview(data)
         n = len(view)
 
@@ -378,8 +408,8 @@ class ZIRReader:
                 logits[key] = arr
                 off += bytes_needed
 
-            from ..storages import ReadResult  # type: ignore
-            return ReadResult(read_id=rid, _logits=logits, num_chunks=num_chunks, chunk_size=chunk_size)
+            from ..storages import ReadResultDetailed  # type: ignore
+            return ReadResultDetailed(read_id=rid, _logits=logits, num_chunks=num_chunks, chunk_size=chunk_size)
 
         elif record_kind == 1:
             # -------- SUMMARY record (compressed) --------
@@ -390,11 +420,11 @@ class ZIRReader:
             summary = json.loads(data[off:off+summary_len].decode("utf-8"))
             off += summary_len
 
-            from ..storages import ReadResultCompressed  # type: ignore
+            from ..storages import ReadResult  # type: ignore
             top3 = summary.get("top3_classes", [])
             top3_np = np.asarray(top3, dtype=np.int64) if not isinstance(top3, np.ndarray) else top3
 
-            return ReadResultCompressed(
+            return ReadResult(
                 read_id=rid,
                 top3_classes=top3_np,
                 variable_region_range=tuple(summary.get("variable_region_range", (-1, -1))),
