@@ -9,7 +9,7 @@ tRNA ionic current model and alignment tools
   - [Available models](#available-models)
   - [Inference](#inference)
     - [InferenceResults](#inferenceresults)
-    - [Readresult](#readresult)
+    - [ReadResultDetailed](#ReadResultDetailed)
   - [Visualization](#visualization)
 # Installation
 
@@ -101,7 +101,7 @@ results = infer_engine.predict(...)
 ```
 
 
-- #### `results[read_id] -> ReadResult`
+- #### `results[read_id] -> ReadResultDetailed`
     Returns the inference result for a specific read ID. Raises `KeyError` if not found.
 
     ```python
@@ -154,9 +154,9 @@ results = infer_engine.predict(...)
     summary = results.label_names
     ```
 
-### ReadResult
+### ReadResultDetailed
 
-Each value corresponding to a read_id key in InferenceResults is a ReadResult object. It stores the model outputs for a single read. Probabilities and predictions for both sequence-level and read-level tasks can be accessed directly from this object.
+Each value corresponding to a read_id key in InferenceResults is a ReadResultDetailed object. It stores the model outputs for a single read. Probabilities and predictions for both sequence-level and read-level tasks can be accessed directly from this object.
 
 You do not need to create this class manually — it is returned when you access a read ID from InferenceResults:
 
