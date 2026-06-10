@@ -1,3 +1,4 @@
+from __future__ import annotations
 import struct
 import json
 import os
@@ -16,9 +17,7 @@ from .archive_format import (
 )
 
 if TYPE_CHECKING:
-    from ..storages import InferenceMetadata, ReadResult, ReadResultCompressed
-
-ReadResultUnion = Union["ReadResult", "ReadResultCompressed"]
+    from ..storages import InferenceMetadata, ReadResultLike, InferenceStore
 
 logger = logging.getLogger(__name__)
 
@@ -35,22 +34,31 @@ class ZIRWriter:
 
     Record layout (per record):
         RECORD_MARKER
-        compressed_size : uint32 LE
+        compressed_size   : uint32 LE
         uncompressed_size : uint32 LE
         compressed_payload : bytes[compressed_size]
 
-    Uncompressed payload layout:
+    Uncompressed payload layout (common prefix):
         read_id_len : uint16 LE
         read_id     : utf8 bytes[read_id_len]
         num_chunks  : int32 LE
         chunk_size  : int32 LE
-        num_logits  : uint8
+        record_kind : uint8        # 0 = FULL (logits), 1 = SUMMARY (compressed)
+
+    record_kind == 0  (FULL — ReadResultDetailed):
+        num_logits : uint8
         repeat num_logits times:
             key_len : uint8
             key     : utf8 bytes[key_len]
             ndim    : uint8
             shape   : uint32 LE [ndim]
-            data    : float32 little-endian bytes[prod(shape)*4]
+            data    : float32 little-endian bytes[prod(shape) * 4]
+
+    record_kind == 1  (SUMMARY — ReadResult):
+        summary_len : uint32 LE
+        summary     : utf8 JSON bytes[summary_len]
+                      keys: top3_classes, variable_region_range,
+                            smoothed_variable_region_range, fragmented
     """
 
     __slots__ = (
@@ -117,11 +125,11 @@ class ZIRWriter:
             self._file = None
 
     # ---------------- Public API ---------------- #
-    def add_result(self, read_result: ReadResultUnion) -> None:
+    def add_result(self, read_result: ReadResultLike) -> None:
         """Append a single read result as a compressed record.
 
         Args:
-            read_result: ReadResult Object with fields
+            read_result: ReadResultDetailed Object with fields
                 - read_id (str)
                 - num_chunks (int)
                 - chunk_size (int)
@@ -129,7 +137,7 @@ class ZIRWriter:
                 
             OR
             
-            read_result: ReadResultCompressed Object
+            read_result: ReadResult Object
             
         """
         if self._file is None:
@@ -184,7 +192,7 @@ class ZIRWriter:
             f.write(b"\x00" * padding)
 
     # ---------------- Internal: Serialization ---------------- #
-    def _serialize_result(self, rr: ReadResultUnion) -> bytes:
+    def _serialize_result(self, rr: ReadResultLike) -> bytes:
         # Validate and prepare fields common to both
         read_id = rr.read_id
         if not isinstance(read_id, str):
@@ -198,7 +206,7 @@ class ZIRWriter:
 
         # Detect summary vs full: full has _logits; summary has top3_classes and no _logits
         has_logits = hasattr(rr, "_logits") and getattr(rr, "_logits") is not None
-        is_summary = not has_logits  # i.e., ReadResultCompressed
+        is_summary = not has_logits  # i.e., ReadResult
 
         buf = io.BytesIO()
 
@@ -288,7 +296,6 @@ class ZIRWriter:
         return buf.getvalue()
 
 
-        
 class ZIRShardManager:
     """Manages writing to ZIR files with optional sharding and comprehensive path handling."""
     
@@ -306,7 +313,7 @@ class ZIRShardManager:
                 - If shard_size is None: Must be a file path ending with .zir
                 - If shard_size is set:
                     - Directory: Files saved as dir/shard0000.zir, dir/shard0001.zir
-                    - Path without extension: /path/save → /path/save_shard0000.zir
+                    - Path without extension: /path/save -> /path/save_shard0000.zir
                     - Path with extension: Extension ignored, user warned
             metadata: Inference metadata
             shard_size: Records per shard (None for single file)
@@ -377,7 +384,7 @@ class ZIRShardManager:
             # Sharding mode - create output directory
             self.output_dir.mkdir(parents=True, exist_ok=True)
     
-    def add_result(self, read_result: ReadResultUnion) -> None:
+    def add_result(self, read_result: ReadResultLike) -> None:
         """Add a result, potentially opening a new shard."""
         if self.shard_size and self.current_count >= self.shard_size:
             self._close_current_shard()
@@ -416,3 +423,39 @@ class ZIRShardManager:
     def close(self) -> None:
         """Close any open shard and finalize."""
         self._close_current_shard()
+
+
+# ---------------- Backend-agnostic writer ---------------- #
+def write_zir(
+    store: "InferenceStore",
+    path: Union[str, Path],
+    *,
+    shard_size: Optional[int] = None,
+) -> Path:
+    """Serialize any InferenceStore (in-memory or on-disk) to ZIR.
+
+    Works for both InferenceResults and ZIRReader because it only needs the store's
+    ``metadata`` and an iteration over its reads. Iterating a ZIRReader streams reads
+    from disk, so re-sharding/re-compressing an archive does not materialize it in RAM.
+
+    Args:
+        store: Any object satisfying the InferenceStore protocol.
+        path: Output path (file for single, directory/prefix for sharded).
+        shard_size: Records per shard, or None for a single file.
+
+    Returns:
+        The single-file path (single mode) or the parent directory (sharded mode).
+    """
+    if shard_size is None:
+        with ZIRWriter(path, store.metadata) as writer:
+            for read in store:
+                writer.add_result(read)
+        return Path(path)
+
+    manager = ZIRShardManager(path, store.metadata, shard_size)
+    try:
+        for read in store:
+            manager.add_result(read)
+    finally:
+        manager.close()
+    return Path(path).parent
