@@ -14,7 +14,7 @@ from uuid import UUID
 
 from ..config.model_config import ModelConfig, ModelLoader
 from ..feeders import SequenceStandardizer
-from ..storages import InferenceResults, InferenceMetadata, ReadResult
+from ..storages import InferenceResults, InferenceMetadata, ReadResultDetailed
 from ..utils import PathSet
 from ..io import ZIRShardManager
 

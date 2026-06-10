@@ -17,7 +17,7 @@ from tqdm.auto import tqdm
 from .inference_base import InferenceBase
 from ..config.model_config import ModelConfig, ModelLoader
 from ..feeders import SequenceStandardizer, collate_fn
-from ..storages import InferenceResults, InferenceMetadata, ReadResult, ReadResultCompressed
+from ..storages import InferenceResults, InferenceMetadata, ReadResultDetailed, ReadResult
 from ..utils import PathSet
 from ..io import ZIRWriter, ZIRShardManager
 
@@ -186,13 +186,13 @@ class Inference(InferenceBase):
         pod5_paths: Union[PathLike, PathLikeList],
         read_ids: Optional[List[str]] = None,
         batch_size: int = 32,
-    ) -> Iterator[ReadResult]:
+    ) -> Iterator[ReadResultDetailed]:
         """
         Iterator version for streaming results without storing in memory.
         
         Yields
         ------
-        ReadResult objects as they are processed
+        ReadResultDetailed objects as they are processed
         
         Example
         -------
@@ -208,7 +208,7 @@ class Inference(InferenceBase):
         )
         
         # Queue for results
-        result_queue: "queue.Queue[Optional[ReadResult]]" = queue.Queue(
+        result_queue: "queue.Queue[Optional[ReadResultDetailed]]" = queue.Queue(
             maxsize=batch_size * 2
         )
 
@@ -323,7 +323,7 @@ class Inference(InferenceBase):
         self,
         *,
         sample_queue: "queue.Queue[Optional[Dict]]",
-        result_queue: "queue.Queue[Optional[ReadResult]]",
+        result_queue: "queue.Queue[Optional[ReadResultDetailed]]",
         batch_size: int,
     ) -> None:
         """GPU thread for iterator: process batches and queue results."""
@@ -346,7 +346,7 @@ class Inference(InferenceBase):
         
         result_queue.put(None)  # Sentinel
 
-    def _run_gpu_batch(self, batch: List[Dict]) -> List[ReadResult]:
+    def _run_gpu_batch(self, batch: List[Dict]) -> List[ReadResultDetailed]:
         """Collate, push to GPU, run model, return results."""
         batch_t = collate_fn(batch)
 
@@ -367,7 +367,7 @@ class Inference(InferenceBase):
                 for k, v in outputs.items()
             }
             
-            result = ReadResult(
+            result = ReadResultDetailed(
                 read_id=read_id,
                 _logits=logits,
                 num_chunks=num_chunks,

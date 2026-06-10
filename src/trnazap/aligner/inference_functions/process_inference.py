@@ -17,7 +17,7 @@ def load_inference_obj(inference_path, threads=1, thread_index=0, pickled=False)
     return: A dictionary for each read in the dataset.
     """
     from ...io import ZIRReader
-    from ...storages import ReadResult, ReadResultCompressed
+    from ...storages import ReadResultDetailed, ReadResult
 
     if pickled:
         with open(inference_path[0], 'rb') as infile:
@@ -40,7 +40,7 @@ def load_inference_obj(inference_path, threads=1, thread_index=0, pickled=False)
                                 desc="Processing reads"):
             if int(read_result.read_id[:8], 16) % threads != thread_index:
                 continue
-            if isinstance(read_result, ReadResultCompressed):
+            if isinstance(read_result, ReadResult):
                 # Compressed record - use top3_classes directly
                 top3_sorted = read_result.top3_classes  # np.ndarray with top 3 class indices
                 
@@ -57,8 +57,8 @@ def load_inference_obj(inference_path, threads=1, thread_index=0, pickled=False)
                 # Use fragmented field
                 fragment_str = str(read_result.fragmented)
                 
-            else:  # isinstance(read_result, ReadResult)
-                # Full ReadResult - compute from classification_probs
+            else:  # isinstance(read_result, ReadResultDetailed)
+                # Full ReadResultDetailed - compute from classification_probs
                 probs = read_result.classification_probs
                 
                 # Get indices of 3 largest values (unsorted within themselves)

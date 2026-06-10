@@ -16,7 +16,7 @@ from .archive_format import (
 )
 
 if TYPE_CHECKING:
-    from ..storages import InferenceMetadata, ReadResult
+    from ..storages import InferenceMetadata, ReadResultDetailed
 
 logger = logging.getLogger(__name__)
 
@@ -115,7 +115,7 @@ class ZIRWriterOld:
             self._file = None
 
     # ---------------- Public API ---------------- #
-    def add_result(self, read_result: "ReadResult") -> None:
+    def add_result(self, read_result: "ReadResultDetailed") -> None:
         """Append a single read result as a compressed record.
 
         Args:
@@ -177,7 +177,7 @@ class ZIRWriterOld:
             f.write(b"\x00" * padding)
 
     # ---------------- Internal: Serialization ---------------- #
-    def _serialize_result(self, rr: "ReadResult") -> bytes:
+    def _serialize_result(self, rr: "ReadResultDetailed") -> bytes:
         # Validate and prepare fields
         read_id = rr.read_id
         if not isinstance(read_id, str):
@@ -350,7 +350,7 @@ class ZIRShardManager:
             # Sharding mode - create output directory
             self.output_dir.mkdir(parents=True, exist_ok=True)
     
-    def add_result(self, read_result: 'ReadResult') -> None:
+    def add_result(self, read_result: 'ReadResultDetailed') -> None:
         """Add a result, potentially opening a new shard."""
         if self.shard_size and self.current_count >= self.shard_size:
             self._close_current_shard()
