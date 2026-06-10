@@ -5,7 +5,7 @@ from torch import nn
 from torchcrf import CRF
 
 if TYPE_CHECKING:
-    from ..storages import ReadResult, ReadResultCompressed
+    from ..storages import ReadResultDetailed, ReadResult
 
 class CRFSmoother:
     def __init__(
@@ -96,20 +96,20 @@ class CRFSmoother:
         
     def decode_read_results(
         self,
-        read_results: List["ReadResult"],
+        read_results: List["ReadResultDetailed"],
         return_numpy: bool = True,
     ) -> Union[np.ndarray, List[np.ndarray], List[List[int]]]:
         if not read_results:
             raise ValueError("read_results is empty")
 
-        from ..storages import ReadResult, ReadResultCompressed
+        from ..storages import ReadResultDetailed, ReadResult
         # Collect per-read logits as tensors (Ti, C)
         seqs = []
         lens = []
         C_expected = self.num_tags
         for rr in read_results:
-            if isinstance(rr, ReadResultCompressed):
-                raise NotImplementedError("CRF smoothing can only be applied to raw ReadResult, not ReadResultCompressed")
+            if isinstance(rr, ReadResult):
+                raise NotImplementedError("CRF smoothing can only be applied to raw ReadResultDetailed, not ReadResult")
             em = torch.as_tensor(rr.segmentation_logits, dtype=self.dtype, device=self.device)
             if em.ndim != 2:
                 raise ValueError(f"Each segmentation_logits must be (T,C); got {tuple(em.shape)}")

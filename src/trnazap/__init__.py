@@ -2,7 +2,7 @@ from .inference import Inference, SingleReadInference
 from .io import ZIRReader, ZIRWriter
 
 # Results
-from .storages import InferenceResults, InferenceMetadata, ReadResult, ReadResultCompressed
+from .storages import InferenceResults, InferenceMetadata, ReadResultDetailed, ReadResult
 
 # Visualization
 from .visualize import ZAPInferenceVisualizer
@@ -16,8 +16,8 @@ __all__ = [
     # Results
     'InferenceResults',
     'InferenceMetadata',
+    'ReadResultDetailed',
     'ReadResult',
-    'ReadResultCompressed',
     
     # Visualization
     'ZAPInferenceVisualizer',

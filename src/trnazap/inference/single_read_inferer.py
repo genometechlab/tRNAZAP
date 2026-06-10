@@ -17,7 +17,7 @@ import tqdm
 from .inference_base import InferenceBase
 from ..config.model_config import ModelConfig, ModelLoader
 from ..feeders import SequenceStandardizer, collate_fn
-from ..storages import InferenceResults, InferenceMetadata, ReadResult
+from ..storages import InferenceResults, InferenceMetadata, ReadResultDetailed
 from ..utils import PathSet
 from ..io import ZIRWriter, ZIRShardManager
 
@@ -89,7 +89,7 @@ class SingleReadInference(InferenceBase):
             for k, v in outputs.items()
         }
         
-        result = ReadResult(
+        result = ReadResultDetailed(
             read_id=read_id,
             _logits=logits,
             num_chunks=num_chunks,

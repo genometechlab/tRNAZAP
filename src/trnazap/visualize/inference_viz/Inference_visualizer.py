@@ -12,7 +12,7 @@ from uuid import UUID
 
 from ...config.model_config import ModelConfig
 from ...feeders import SequenceScaler
-from ...storages import ReadResult, ReadResultCompressed
+from ...storages import ReadResultDetailed, ReadResult
 
 
 logger = logging.getLogger(__name__)
@@ -86,14 +86,14 @@ class ZAPInferenceVisualizer:
 
     def visualize(
         self,
-        read_results: Union[List[ReadResult], ReadResult],
+        read_results: Union[List[ReadResultDetailed], ReadResultDetailed],
         apply_crf_smoothing: bool = True,
         plot_probabilities: bool = True,
         plot_signal: bool = True,
         ground_truth_segmentations: List[int] = None,
         figure_size: Tuple[int, int] = (16, 8),
     ) -> Union[plt.Figure, List[plt.Figure]]:
-        single_input = isinstance(read_results, ReadResult) or isinstance(read_results, ReadResultCompressed)
+        single_input = isinstance(read_results, ReadResultDetailed) or isinstance(read_results, ReadResult)
         if single_input:
             read_results = [read_results]
 
@@ -118,7 +118,7 @@ class ZAPInferenceVisualizer:
 
     def _create_visualization(
         self,
-        read_result: Union[ReadResult,ReadResultCompressed],
+        read_result: Union[ReadResultDetailed,ReadResult],
         signal: np.ndarray,
         apply_crf_smoothing: bool,
         plot_probabilities: bool,
@@ -136,7 +136,7 @@ class ZAPInferenceVisualizer:
         if plot_signal:
             self._plot_signal(ax, signal_scaled)
             
-        if isinstance(read_result, ReadResult):
+        if isinstance(read_result, ReadResultDetailed):
             predicted_cls = read_result.classification_pred
             plot_segmentation = True
             if read_result.segmentation_logits is None:
@@ -160,12 +160,12 @@ class ZAPInferenceVisualizer:
                 self._plot_segmentations(ax, ground_truth_segmentations, read_result.chunk_size,
                         "GT", VIZ_PARAMS["gt"])
         
-        elif isinstance(read_result, ReadResultCompressed):
+        elif isinstance(read_result, ReadResult):
             predicted_cls = read_result.top3_classes[0]
             if apply_crf_smoothing:
-                warnings.warn("Cannot apply the CRF smoothing on ReadResultcompressed."+
-                            " Requires raw ReadResult,"+
-                            " Pass save_raw=True to inference to get raw ReadResults")
+                warnings.warn("Cannot apply the CRF smoothing on ReadResult."+
+                            " Requires raw ReadResultDetailed,"+
+                            " Pass save_raw=True to inference to get raw ReadResultDetaileds")
         
             variable_region_range = read_result.variable_region_range
             start_ = variable_region_range[0]//read_result.chunk_size

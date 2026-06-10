@@ -14,7 +14,7 @@ from .archive_format import MAGIC_BYTES, FORMAT_VERSION, HEADER_SIZE, RECORD_MAR
 from ..utils import search_path
 
 if TYPE_CHECKING:
-    from ..storages import InferenceMetadata, InferenceResults, ReadResult
+    from ..storages import InferenceMetadata, InferenceResults, ReadResultDetailed
 
 logger = logging.getLogger(__name__)
 PathLike = Union[str, Path, os.PathLike]
@@ -129,11 +129,11 @@ class ZIRReaderOld:
     def __len__(self) -> int:
         return self.record_count
 
-    def __iter__(self) -> Generator["ReadResult", None, None]:
+    def __iter__(self) -> Generator["ReadResultDetailed", None, None]:
         return self.reads()
 
     # ---------------- Public API ---------------- #
-    def reads(self, selection: Optional[Set[str]] = None) -> Generator["ReadResult", None, None]:
+    def reads(self, selection: Optional[Set[str]] = None) -> Generator["ReadResultDetailed", None, None]:
         """Iterate reads; if *selection* provided, use fast path to avoid full decompress.
 
         Args:
@@ -231,7 +231,7 @@ class ZIRReaderOld:
 
         self._index = index
 
-    def get_read(self, read_id: str) -> "ReadResult":
+    def get_read(self, read_id: str) -> "ReadResultDetailed":
         if self._index is None:
             self.build_index()
         assert self._index is not None
@@ -306,7 +306,7 @@ class ZIRReaderOld:
             )
         return data
 
-    def _parse_record(self, data: bytes) -> "ReadResult":
+    def _parse_record(self, data: bytes) -> "ReadResultDetailed":
         view = memoryview(data)
         n = len(view)
 
@@ -374,8 +374,8 @@ class ZIRReaderOld:
             logits[key] = arr
             off += bytes_needed
 
-        from ..storages import ReadResult  # type: ignore
-        return ReadResult(read_id=rid, _logits=logits, num_chunks=num_chunks, chunk_size=chunk_size)
+        from ..storages import ReadResultDetailed  # type: ignore
+        return ReadResultDetailed(read_id=rid, _logits=logits, num_chunks=num_chunks, chunk_size=chunk_size)
 
     def _read_header(self, f: io.BufferedReader) -> Tuple[Dict[str, Any], int]:
         magic = f.read(len(MAGIC_BYTES))
