@@ -20,6 +20,7 @@ from .comparison_plots import (
     plot_length_identity_heatmaps,
     plot_per_read_identity_2dhist,
     plot_misclassified_identity_2dhist,
+    plot_each_isodecoder_misclassified_identity_2dhist,
     plot_one_aligner_only_histograms,
     create_summary_statistics_table,
     plot_identity_histograms,
@@ -307,6 +308,7 @@ def generate_aligner_comparison_figures(
     if misclassified_identity:
         print("  9. Misclassified read identity 2D histogram...")
         plot_misclassified_identity_2dhist(comparison_data, ident_threshold, out_dir, out_prefix)
+        plot_each_isodecoder_misclassified_identity_2dhist(comparison_data, ident_threshold, out_dir, out_prefix)
     
     if one_aligner_only:
         print(" 10. One-aligner-only identity histograms...")

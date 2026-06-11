@@ -232,6 +232,11 @@ def _merge_by_trna_dicts(sub_dicts):
     
     return merged
 
+def _get_isoacceptor(trna):
+    if "mito" in trna or "MT" in trna:
+        return trna
+    return trna.split('-')[1:-2]
+
 
 def compare_alignments_lightweight(bwa_data, zap_data):
     """
