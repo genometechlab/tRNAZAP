@@ -14,6 +14,7 @@ from scipy import stats
 from statsmodels.stats.multitest import multipletests
 import json
 from importlib.resources import files
+from collections import defaultdict
 
 plt.rcParams['pdf.fonttype'] = 42
 plt.switch_backend('agg')
@@ -1409,3 +1410,92 @@ def plot_positional_error_barplots(bwa_data, zap_data, model,
     plt.close(fig)
     
     return present_trnas
+
+# ============================================================================
+# PLOT 14: Per-isoacceptor identity plots
+# ============================================================================
+
+def _get_isoacceptor(trna):
+    if "mito" in trna or "MT" in trna:
+        return trna
+    return "-".join(trna.split('-')[1:-2])
+
+def plot_each_isodecoder_misclassified_identity_2dhist(comparison_data, 
+                                                       ident_threshold=0.75,
+                                                       out_dir=None, 
+                                                       out_prefix=''):
+    """
+    2D histogram for reads where aligners disagree on tRNA classification (specific to isoacceptor family).
+    Uses 1% bins starting from floored ident_threshold.
+    Zap on x-axis, BWA on y-axis.
+    """
+    # Get identities for disagreed reads
+
+    bwa_idents = [0] * len(comparison_data['read_sets']['disagree'])
+    zap_idents = [0] * len(comparison_data['read_sets']['disagree'])
+    bwa_trna = [0] * len(comparison_data['read_sets']['disagree'])
+    zap_trna = [0] * len(comparison_data['read_sets']['disagree'])
+    bwa_isoacceptor = [0] * len(comparison_data['read_sets']['disagree'])
+    zap_isoacceptor = [0] * len(comparison_data['read_sets']['disagree'])
+    
+    for i, read_id in enumerate(comparison_data['read_sets']['disagree']):
+        info = comparison_data['read_comparison'][read_id]
+        
+        bwa_idents[i] = info['bwa_identity']
+        zap_idents[i] = info['zap_identity']
+        bwa_isoacceptor[i] = _get_isoacceptor(info["bwa_trna"])
+        zap_isoacceptor[i] = _get_isoacceptor(info["zap_trna"])
+        bwa_trna[i] = info["bwa_trna"]
+        zap_trna[i] = info["zap_trna"]
+    
+    if len(bwa_idents) == 0:
+        print("No misclassified reads found")
+        return None
+    
+    df = pd.DataFrame({
+        'bwa_ident': bwa_idents,
+        'zap_ident': zap_idents,
+        'bwa_iso' : bwa_isoacceptor,
+        'zap_iso' : zap_isoacceptor,
+        'bwa_trna' : bwa_trna,
+        'zap_trna' : zap_trna
+    })
+
+    for isoacceptor in set(df["bwa_iso"]) | set(df["zap_iso"]):
+        sub_df = df[(df['bwa_iso'] == isoacceptor) & (df['zap_iso'] == isoacceptor)]
+        if len(set(sub_df["bwa_trna"]) | set(sub_df["zap_trna"])) <= 1:
+            continue
+                    
+        # Create 1% bins starting from floored ident_threshold
+        bin_start = np.floor(ident_threshold * 100) / 100  # Round down to nearest 0.01
+        bins = np.arange(bin_start, 1.0 + 0.01, 0.01)
+        
+        fig, ax = plt.subplots(figsize=(8, 8))
+        
+        # Use histogram2d with explicit bins
+        # Zap on x-axis (first arg), BWA on y-axis (second arg)
+        h = ax.hist2d(sub_df['zap_ident'], sub_df['bwa_ident'], 
+                      bins=[bins, bins], cmap='Reds', cmin=1)
+        
+        # Add colorbar
+        plt.colorbar(h[3], ax=ax, label='Count')
+        
+        # Add diagonal line
+        ax.plot([bin_start, 1], [bin_start, 1], 
+                'k--', alpha=0.5, linewidth=2, label='x=y')
+        
+        ax.set_xlabel('Zap Identity', fontsize=12)
+        ax.set_ylabel('BWA Identity', fontsize=12)
+        ax.set_title(f'{isoacceptor} Misclassified Reads Identity (N={len(sub_df):,})', 
+                    fontsize=14, fontweight='bold')
+        ax.set_xlim([bin_start, 1.0])
+        ax.set_ylim([bin_start, 1.0])
+        ax.set_aspect('equal', adjustable='box')  # Make plot square
+        ax.legend()
+        
+        if out_dir:
+            save_path = os.path.join(out_dir, f'{out_prefix}_{isoacceptor}_misclassified_read_identity.pdf')
+            fig.savefig(save_path, dpi=300, bbox_inches='tight')
+        plt.close(fig)
+    
+    return df

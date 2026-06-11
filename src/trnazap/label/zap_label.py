@@ -246,14 +246,13 @@ def zap_label(bam, ref, out, decoder_dict, min_ident, human_ivt = False):
 
     out_dict = {}
     for read in tqdm(af.fetch()):
-
-            
+        
         if read.is_unmapped or read.mapping_quality == 0 or read.is_secondary or read.is_supplementary or read.has_tag('pi') or read.get_tag('ns') >= 1000000:
             continue
 
         if abs(max(read.reference_start, FIVE_PRIME_ADAPTER_LEN) - min(read.reference_end, ref_lens[read.reference_name] - THREE_PRIME_ADAPTER_LEN)) < MIN_TRNA_COVERAGE:
             continue
-        
+
         ref_positions = np.array(read.get_reference_positions(full_length=True))
         
         ref_positions[ref_positions == None] = -1
@@ -264,7 +263,7 @@ def zap_label(bam, ref, out, decoder_dict, min_ident, human_ivt = False):
             fragment = True
 
         matches, mismatches, insertions, deletions = check_identity(read, ref_seqs[read.reference_name], read.reference_start, read.reference_end)
-
+        
         if matches / (matches + mismatches + insertions + deletions) < min_ident:
             continue
 
@@ -273,23 +272,25 @@ def zap_label(bam, ref, out, decoder_dict, min_ident, human_ivt = False):
         if decoder_dict is not None:
             gln_ctg = False
             if 'His-GTG' in read.reference_name or 'Ile-GAT' in read.reference_name or 'SeC-TCA' in read.reference_name or 'Tyr-ATA' in read.reference_name or "Leu-CAA-5-1" in read.reference_name:
-                continue
-            if 'mito' not in read.reference_name and 'Mt_tRNA' not in read.reference_name:
+                pass
+            elif 'mito' not in read.reference_name and 'Mt_tRNA' not in read.reference_name:
                 split_ref = read.reference_name.split('_')[-1].split('-')
                 assert len(split_ref) == 5 ,f"{read.reference_name}"
                 encoder = f"{split_ref[1]}-{split_ref[2]}"
-                if encoder == "Gln-CTG":
-                    gln_ctg = True
-                    encoder = "Gln-TTG"
                 decoder = f"{split_ref[3]}-{split_ref[4]}"
                 if human_ivt:
                     targets = decoder_dict[encoder][read.reference_name]
+
                     dis_amb_result = disambiguate_human_ivt(read, targets)
+
                     if dis_amb_result is None:
                         continue
                     ref_name_tmp = read.reference_name
                     
                 else:
+                    if encoder == "Gln-CTG":
+                        gln_ctg = True
+                        encoder = "Gln-TTG"
                     if encoder in decoder_dict:
                         dis_amb_result = disambiguate(read, decoder_dict[encoder])
                         if dis_amb_result is None:
