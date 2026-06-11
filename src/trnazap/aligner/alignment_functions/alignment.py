@@ -332,6 +332,7 @@ def cigar_tuples_from_edit_instrucitons(
     return cigar_tuples, int(edit_distance)
 
 #Could be njit if we preprocess the pysam read parts?
+#We can augment this if we want to try pulling in some flanking adapter for longer reads
 def subset_sequence(pysam_read, trna_indices):
     """
     Extract the tRNA portion of a sequence based on model inference indices.
@@ -382,8 +383,10 @@ def subset_sequence(pysam_read, trna_indices):
     # Get array indices for the first position after start and last position before end
     start = max(start[0][0]-1, 0)  # First base within tRNA region
     #stop = stop[0][-1] - 1  # Last base within tRNA region
-    #testing why the -1 was there
-    stop = stop[0][-1]+1
+
+    #We could add a higher value here to give some wiggle room on the 5' sequence?
+    stop = min(stop[0][-1] + 6, len(moves))
+    #stop = stop[0][-1]+1
 
     # Calculate the length of unaligned regions for soft-clipping
     # These are important for generating correct CIGAR strings later
