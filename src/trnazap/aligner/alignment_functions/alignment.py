@@ -385,8 +385,8 @@ def subset_sequence(pysam_read, trna_indices):
     #stop = stop[0][-1] - 1  # Last base within tRNA region
 
     #We could add a higher value here to give some wiggle room on the 5' sequence?
-    stop = min(stop[0][-1] + 6, len(moves))
-    #stop = stop[0][-1]+1
+    #stop = min(stop[0][-1] + 6, len(moves))
+    stop = stop[0][-1]+1
 
     # Calculate the length of unaligned regions for soft-clipping
     # These are important for generating correct CIGAR strings later
