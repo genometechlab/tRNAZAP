@@ -1,6 +1,7 @@
 import numpy as np
 from numba import njit
 
+'''
 @njit
 def positional_array(read_ref_end, 
                      read_ref_start, 
@@ -66,6 +67,59 @@ def positional_array(read_ref_end,
                 track_arr[0][idx] += 1
     
     track_arr[2] = (~np.isnan(track_arr[0])).astype(np.float64)
+    return track_arr
+'''
+@njit
+def positional_array(read_ref_end, 
+                     read_ref_start, 
+                     read_align_end, 
+                     aligned_pairs, 
+                     ref_seq, 
+                     read_seq,
+                     region_start, 
+                     region_end):
+    
+    if read_ref_end <= region_start or read_ref_start >= region_end:
+        return np.empty((4, 0), dtype=np.float64)
+
+    track_arr = np.full((4, (region_end - region_start)), np.nan)
+    track_arr[1, :] = 0.0  # Use standard slicing [1, :] instead of [1]
+    track_arr[2, :] = 0.0  
+    track_arr[3, :] = 0.0  
+    
+    last_ref_pos = -1
+    
+    for query_pos, ref_pos in aligned_pairs:   
+        if query_pos != -1 and query_pos >= read_align_end:
+            break
+        if ref_pos == -1:  
+            if last_ref_pos == -1:
+                continue
+            idx = last_ref_pos - region_start
+            if region_start <= last_ref_pos < region_end:
+                track_arr[1, idx] += 1.0  # FIXED: [1, idx] instead of [1][idx]
+            continue
+
+        last_ref_pos = ref_pos
+        if ref_pos < region_start or ref_pos >= region_end:
+            continue
+
+        idx = ref_pos - region_start
+        if np.isnan(track_arr[0, idx]):  # FIXED: [0, idx]
+            track_arr[0, idx] = 0.0      # FIXED: [0, idx]
+            
+        if query_pos == -1:  
+            track_arr[3, idx] += 1.0     # FIXED: [3, idx]
+            continue
+        else:
+            query_base = read_seq[query_pos]
+            ref_base = ref_seq[ref_pos]
+            
+            if query_base == ref_base:
+                track_arr[0, idx] += 1.0  # FIXED: [0, idx]
+    
+    # FIXED: standard 2D slicing for the final assignment
+    track_arr[2, :] = (~np.isnan(track_arr[0, :])).astype(np.float64)
     return track_arr
 
 @njit

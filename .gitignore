@@ -58,6 +58,9 @@ Thumbs.db
 __pycache__/
 preliminary_test_data/
 
+# Temporary / local-only scripts
+tmp/
+
 # Claude Code
 .claude/
 CLAUDE.md
