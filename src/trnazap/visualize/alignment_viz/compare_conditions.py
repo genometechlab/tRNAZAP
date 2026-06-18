@@ -110,16 +110,22 @@ def make_sub_dict(args):
         if read.is_unmapped or read.has_tag('pi') or len(read.query_sequence) < min_coverage:
             continue
 
-        aligned_pairs = np.array([[x if x is not None else -1 for x in row] 
-                                  for row in read.get_aligned_pairs()], dtype=np.int32)
-        
+        pairs_list = [[x if x is not None else -1 for x in row]
+                      for row in read.get_aligned_pairs()]
+        if not pairs_list:
+            continue
+        aligned_pairs = np.array(pairs_list, dtype=np.int32)
+
+        ref_bytes = np.frombuffer(ref_dict[ref_label_dict[read.reference_name]].encode('ascii'), dtype=np.uint8)
+        read_bytes = np.frombuffer(read.query_sequence.encode('ascii'), dtype=np.uint8)
+
         track_arr = positional_array(
             read.reference_end,
             read.reference_start,
             read.query_alignment_end,
             aligned_pairs,
-            ref_dict[ref_label_dict[read.reference_name]],
-            read.query_sequence,
+            ref_bytes,
+            read_bytes,
             five_offset,
             ref_lens[ref_label_dict[read.reference_name]] - three_offset
         )
