@@ -6,26 +6,27 @@ build-backend = "setuptools.build_meta"
 name = "trnazap"
 description = "A package for analyzing tRNA ionic current signal"
 version = "0.1.0"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 license = {file = "LICENSE"}
+# NOTE: `samtools` (htslib) is a runtime system dependency of the
+# `trnazap align` / `alignment_visualize` commands. It is NOT a PyPI package
+# (pysam only provides Python bindings), so it cannot be listed here — install it
+# separately, e.g. `conda install -c bioconda samtools`.
 dependencies = [
-    "numba>=0.62.0",
-    "llvmlite>=0.45.0",
-    "numpy>=2.2.6",
+    "numba>=0.62.1",
+    "numpy>=2.3.5",
     "pysam>=0.22.0",
-    "pod5",
-    "pyarrow",
-    "torch",
-    "pytorch-crf",
-    "scipy",
-    "matplotlib",
-    "seaborn",
-    "pandas",
-    "statsmodels",
-    "tqdm",
-    "PyYAML",
-    "zstandard",
-    "h5py"
+    "pod5>=0.3.23",
+    "torch>=2.6.0",
+    "pytorch-crf>=0.7.2",
+    "scipy>=1.15.2",
+    "matplotlib>=3.10.0",
+    "seaborn>=0.13.2",
+    "pandas>=2.2.3",
+    "statsmodels>=0.14.5",
+    "tqdm>=4.67.1",
+    "PyYAML>=6.0.2",
+    "zstandard>=0.23.0",
     ]
 
 [tool.black]
