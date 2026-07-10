@@ -2,6 +2,8 @@
 
 tRNA ionic current model and alignment tools
 
+<img src="images/graphic_abstract.png" />
+
 ## Table of Contents
 
 - [Installation](#installation)
