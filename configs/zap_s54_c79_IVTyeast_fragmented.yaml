@@ -3,9 +3,9 @@ stem_type: "identity"       # "identity" | "conv"
 chunk_size: 54              # effective stride = samples per output token (ALWAYS)
 
 # Conv stem only (ignored for identity):
-stem_channels: [1, 32, 64, 128]   # len - 1 == number of layers
-stem_kernel_sizes: [10, 8, 4]     # per layer
-stem_strides: [3, 3, 2]           # per layer — product MUST equal chunk_size (18)
+stem_channels: [1, 32, 64, 128]
+stem_kernel_sizes: [9, 6, 3]   # receptive field tapers down
+stem_strides: [6, 3, 3]        # product = 54
 stem_activation: "gelu"
 
 # --- Transformer ---
@@ -19,6 +19,7 @@ hidden_size: 256
 dim_feedforward: 512
 dropout: 0.1
 positional_encoding_type: "sinusoidal"
+norm_first: False
 
 # Data type
 float_dtype: "float16"  # Options: float16 float32 float64
