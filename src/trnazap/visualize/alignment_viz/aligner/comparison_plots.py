@@ -1223,6 +1223,29 @@ def create_summary_statistics_table(bwa_data, zap_data, model,
 
 
 # ============================================================================
+# PLOT 11b: Total Read Count Barplot
+# ============================================================================
+
+def plot_total_read_count_barplot(summary_df, out_dir=None, out_prefix=''):
+    """
+    Barplot of total read counts (All_tRNAs row) for BWA vs Zap.
+    """
+    fig, ax = plt.subplots(1)
+    fig.set_figwidth(6)
+    fig.set_figheight(12)
+    sns.barplot(data=summary_df[summary_df['tRNA'] == "All_tRNAs"],
+                x="Aligner", y="N_reads", hue="Aligner", ax=ax)
+    ax.set_yticks(plt.yticks()[0])
+    ax.set_yticklabels(plt.yticks()[1])
+
+    if out_dir:
+        out_path = os.path.join(out_dir, f"{out_prefix}_count_plot.pdf")
+        fig.savefig(out_path)
+        print(f"Saved count plot: {out_path}")
+    plt.close(fig)
+
+
+# ============================================================================
 # PLOT 12: Identity Histograms (3 versions)
 # ============================================================================
 
@@ -1497,5 +1520,126 @@ def plot_each_isodecoder_misclassified_identity_2dhist(comparison_data,
             save_path = os.path.join(out_dir, f'{out_prefix}_{isoacceptor}_misclassified_read_identity.pdf')
             fig.savefig(save_path, dpi=300, bbox_inches='tight')
         plt.close(fig)
-    
+
+    return df
+
+
+# ============================================================================
+# PLOT 14b: Isodecoder distribution table
+# ============================================================================
+
+def create_isodecoder_distribution_table(bwa_data, zap_data, comparison_data,
+                                          out_dir=None, out_prefix=''):
+    """
+    Per-isoacceptor summary table with BWA vs Zap identity distribution tests.
+    Only includes families with >1 unique tRNA in the misclassified (disagree) read set,
+    matching the filter used by plot_each_isodecoder_misclassified_identity_2dhist.
+
+    Columns: Isoacceptor, N_reads_BWA, N_reads_Zap, Identity_mean/median BWA/Zap,
+             Mann-Whitney U stat/pvalue/pvalue_adj, zap_benefit,
+             N_disagreement_reads, Identity_median_BWA/Zap_disagreement, Zap_isodecoder_counts.
+    Zap_isodecoder_counts lists each tRNA name and its Zap read count separated by ';'.
+    The *_disagreement columns are restricted to reads where BWA and Zap agree on
+    isoacceptor but disagree on isodecoder (the reads that make the family qualify).
+    """
+    # Find qualifying isoacceptors using the same filter as the 2D hist plots:
+    # reads where both aligners assigned to the same isoacceptor family but different tRNAs.
+    iso_trna_pairs = defaultdict(set)
+    iso_disagreement_bwa_idents = defaultdict(list)
+    iso_disagreement_zap_idents = defaultdict(list)
+    for read_id in comparison_data['read_sets']['disagree']:
+        info = comparison_data['read_comparison'][read_id]
+        bwa_iso = _get_isoacceptor(info['bwa_trna'])
+        zap_iso = _get_isoacceptor(info['zap_trna'])
+        if bwa_iso == zap_iso:
+            iso_trna_pairs[bwa_iso].add(info['bwa_trna'])
+            iso_trna_pairs[bwa_iso].add(info['zap_trna'])
+            iso_disagreement_bwa_idents[bwa_iso].append(info['bwa_identity'])
+            iso_disagreement_zap_idents[bwa_iso].append(info['zap_identity'])
+
+    qualifying_isos = {iso for iso, trnas in iso_trna_pairs.items() if len(trnas) > 1}
+
+    # Map each known tRNA to its isoacceptor family
+    all_trnas = set(bwa_data['by_trna'].keys()) | set(zap_data['by_trna'].keys())
+    iso_to_trnas = defaultdict(list)
+    for trna in all_trnas:
+        iso_to_trnas[_get_isoacceptor(trna)].append(trna)
+
+    rows = []
+    for iso in sorted(qualifying_isos):
+        trnas_in_iso = iso_to_trnas[iso]
+
+        bwa_idents = []
+        for trna in trnas_in_iso:
+            if trna in bwa_data['by_trna']:
+                bwa_idents.extend(bwa_data['by_trna'][trna]['identities'])
+
+        zap_idents = []
+        for trna in trnas_in_iso:
+            if trna in zap_data['by_trna']:
+                zap_idents.extend(zap_data['by_trna'][trna]['identities'])
+
+        # Zap per-isodecoder counts: "tRNA-name:count;..."
+        zap_counts_parts = []
+        for trna in sorted(trnas_in_iso):
+            if trna in zap_data['by_trna']:
+                count = len(zap_data['by_trna'][trna]['identities'])
+                zap_counts_parts.append(f"{trna}:{count}")
+        zap_counts_str = ";".join(zap_counts_parts)
+
+        if len(bwa_idents) >= 2 and len(zap_idents) >= 2:
+            stat, pvalue = stats.mannwhitneyu(bwa_idents, zap_idents, alternative='two-sided')
+        else:
+            stat, pvalue = np.nan, np.nan
+
+        # Identity restricted to reads where BWA and Zap agree on isoacceptor
+        # but disagree on isodecoder (the reads that made this family qualify)
+        disagreement_bwa_idents = iso_disagreement_bwa_idents[iso]
+        disagreement_zap_idents = iso_disagreement_zap_idents[iso]
+
+        rows.append({
+            'Isoacceptor': iso,
+            'N_reads_BWA': len(bwa_idents),
+            'N_reads_Zap': len(zap_idents),
+            'Identity_mean_BWA': np.mean(bwa_idents) if bwa_idents else np.nan,
+            'Identity_mean_Zap': np.mean(zap_idents) if zap_idents else np.nan,
+            'Identity_median_BWA': np.median(bwa_idents) if bwa_idents else np.nan,
+            'Identity_median_Zap': np.median(zap_idents) if zap_idents else np.nan,
+            'stat': stat,
+            'pvalue': pvalue,
+            'zap_benefit': (np.median(zap_idents) > np.median(bwa_idents))
+                           if (zap_idents and bwa_idents) else False,
+            'N_disagreement_reads': len(disagreement_bwa_idents),
+            'Identity_median_BWA_disagreement': np.median(disagreement_bwa_idents)
+                                                 if disagreement_bwa_idents else np.nan,
+            'Identity_median_Zap_disagreement': np.median(disagreement_zap_idents)
+                                                 if disagreement_zap_idents else np.nan,
+            'Zap_isodecoder_counts': zap_counts_str
+        })
+
+    if not rows:
+        return pd.DataFrame()
+
+    df = pd.DataFrame(rows)
+
+    # BH correction across all families
+    df['pvalue_adj'] = np.nan
+    valid_mask = ~df['pvalue'].isna()
+    if valid_mask.sum() > 0:
+        _, pvals_adj, _, _ = multipletests(df.loc[valid_mask, 'pvalue'], method='fdr_bh')
+        df.loc[valid_mask, 'pvalue_adj'] = pvals_adj
+
+    df = df[['Isoacceptor', 'N_reads_BWA', 'N_reads_Zap',
+             'Identity_mean_BWA', 'Identity_mean_Zap',
+             'Identity_median_BWA', 'Identity_median_Zap',
+             'stat', 'pvalue', 'pvalue_adj', 'zap_benefit',
+             'N_disagreement_reads',
+             'Identity_median_BWA_disagreement', 'Identity_median_Zap_disagreement',
+             'Zap_isodecoder_counts']]
+
+    if out_dir:
+        csv_path = os.path.join(out_dir, f"{out_prefix}_isodecoder_distribution_table.csv")
+        df.to_csv(csv_path, index=False, float_format='%.4f')
+        print(f"Saved isodecoder distribution table: {csv_path}")
+
     return df
