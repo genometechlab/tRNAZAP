@@ -23,8 +23,10 @@ from .comparison_plots import (
     plot_each_isodecoder_misclassified_identity_2dhist,
     plot_one_aligner_only_histograms,
     create_summary_statistics_table,
+    plot_total_read_count_barplot,
     plot_identity_histograms,
-    plot_positional_error_barplots
+    plot_positional_error_barplots,
+    create_isodecoder_distribution_table
 )
 
 
@@ -126,8 +128,10 @@ def generate_aligner_comparison_figures(
         misclassified_identity=True,
         one_aligner_only=True,
         summary_table=True,
+        read_count_barplot=True,
         identity_histograms=True,
-        positional_error_barplots=True
+        positional_error_barplots=True,
+        isodecoder_table=True
     ):
     """
     Complete aligner comparison pipeline: load data, compare, and generate all figures.
@@ -172,6 +176,10 @@ def generate_aligner_comparison_figures(
         Generate one-aligner-only identity histograms
     summary_table : bool
         Generate summary statistics table
+    read_count_barplot : bool
+        Generate total read count barplot (BWA vs Zap, All_tRNAs row)
+    isodecoder_table : bool
+        Generate per-isoacceptor distribution table with statistical tests
     identity_histograms : bool
         Generate identity distribution histograms
     positional_error_barplots : bool
@@ -234,7 +242,16 @@ def generate_aligner_comparison_figures(
     print(f"  Aligned reads: {len(bwa_data['by_read']):,}")
     print(f"  Failed reads: {len(bwa_data['failed_reads']):,}")
     print(f"  Unmapped reads: {len(bwa_data['unmapped_reads']):,}")
+    print(f"  MAPQ 0 primary alignments (multimappers): {sum(bwa_data['mapq0_by_trna'].values()):,}")
     print(f"  Time: {(time() - t0) / 60:.2f} minutes")
+
+    # Write per-reference MAPQ 0 counts to TSV
+    mapq0_tsv = os.path.join(out_dir, f"{out_prefix}_bwa_mapq0_per_ref.tsv")
+    with open(mapq0_tsv, 'w') as fh:
+        fh.write("tRNA\tMAPQ0_reads\n")
+        for trna, count in sorted(bwa_data['mapq0_by_trna'].items()):
+            fh.write(f"{trna}\t{count}\n")
+    print(f"  MAPQ 0 per-reference table: {mapq0_tsv}")
     
     # Load Zap alignments
     print("\n" + "="*70)
@@ -309,15 +326,25 @@ def generate_aligner_comparison_figures(
         print("  9. Misclassified read identity 2D histogram...")
         plot_misclassified_identity_2dhist(comparison_data, ident_threshold, out_dir, out_prefix)
         plot_each_isodecoder_misclassified_identity_2dhist(comparison_data, ident_threshold, out_dir, out_prefix)
+        if isodecoder_table:
+            print("  9b. Isodecoder distribution table...")
+            create_isodecoder_distribution_table(bwa_data, zap_data, comparison_data, out_dir, out_prefix)
     
     if one_aligner_only:
         print(" 10. One-aligner-only identity histograms...")
         plot_one_aligner_only_histograms(comparison_data, bwa_data, zap_data, 
                                         ident_threshold, out_dir, out_prefix)
     
+    summary_df = None
     if summary_table:
         print(" 11. Summary statistics table...")
-        create_summary_statistics_table(bwa_data, zap_data, model, out_dir, out_prefix)
+        summary_df = create_summary_statistics_table(bwa_data, zap_data, model, out_dir, out_prefix)
+
+    if read_count_barplot:
+        print(" 11b. Total read count barplot...")
+        if summary_df is None:
+            summary_df = create_summary_statistics_table(bwa_data, zap_data, model, out_dir=None, out_prefix=out_prefix)
+        plot_total_read_count_barplot(summary_df, out_dir, out_prefix)
     
     if identity_histograms:
         print(" 12. Identity histograms (3 versions)...")
