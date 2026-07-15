@@ -64,3 +64,4 @@ tmp/
 # Claude Code
 .claude/
 CLAUDE.md
+ALIGNMENT_PUBLICATION_FIXES.md
