@@ -99,7 +99,7 @@ def _run_chunk(
     if gpu_idx==0:
         logger.info("[GPU %d] Processing chunk %d (%d reads)", gpu_idx, shard_idx, len(read_ids))
 
-    out_file = results_dir / f"results_{shard_idx}.zir"
+    out_file = results_dir / f"results_{shard_idx:05d}.zir"
 
     engine = Inference(config_path, device=device, save_raw=save_raw)
     engine.predict(
