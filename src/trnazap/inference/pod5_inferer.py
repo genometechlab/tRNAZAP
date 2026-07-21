@@ -138,6 +138,8 @@ class Inference(InferenceBase):
         sample_queue: "queue.Queue[Optional[Dict]]" = queue.Queue(
             maxsize=batch_size * self.queue_size_mult
         )
+        
+        stats = {"failed": 0}
 
         # Producer thread
         producer = threading.Thread(
@@ -146,7 +148,8 @@ class Inference(InferenceBase):
                 pod5_paths=pod5_pathset.paths,
                 read_ids=read_ids,
                 sample_queue=sample_queue,
-                progress_bar=producer_pbar
+                progress_bar=producer_pbar,
+                stats=stats,
             ),
             daemon=True,
             name="pod5-producer",
@@ -163,6 +166,9 @@ class Inference(InferenceBase):
         )
 
         producer.join()
+
+        if stats["failed"]:
+            logger.info("Failed to process %d read(s)", stats["failed"])
         
         # Finalize
         total_time = time.time() - start
@@ -212,6 +218,8 @@ class Inference(InferenceBase):
             maxsize=batch_size * 2
         )
 
+        stats = {"failed": 0}
+        
         # Producer thread
         producer = threading.Thread(
             target=self._producer_worker,
@@ -220,6 +228,7 @@ class Inference(InferenceBase):
                 read_ids=read_ids,
                 sample_queue=sample_queue,
                 progress_bar=None,
+                stats=stats,
             ),
             daemon=True,
         )
@@ -245,6 +254,10 @@ class Inference(InferenceBase):
             yield result
 
         producer.join()
+
+        if stats["failed"]:
+            logger.info("Failed to process %d read(s)", stats["failed"])
+            
         consumer.join()
 
     def _producer_worker(
@@ -253,7 +266,8 @@ class Inference(InferenceBase):
         pod5_paths: Union[PathLike, PathLikeList],
         sample_queue: "queue.Queue[Optional[Dict]]",
         read_ids: Optional[List[str]],
-        progress_bar: Optional[tqdm.tqdm]
+        progress_bar: Optional[tqdm.tqdm],
+        stats: Optional[Dict[str, int]]
     ) -> None:
         """CPU thread: stream reads → standardise → chunk → queue."""
         try:
@@ -267,12 +281,19 @@ class Inference(InferenceBase):
                 )
 
                 for rec in reads_iter:
+                    sample = None
                     try:
-                        sample_queue.put(self._process_record(rec), block=True)
+                        sample = self._process_record(rec)
+                    except Exception as exc:
+                        stats["failed"] += 1
+                        logger.warning("Failed on read %s: %s", rec.read_id, exc)
+                    finally:
                         if progress_bar:
                             progress_bar.update(1)
-                    except Exception as exc:
-                        logger.warning("Failed on read %s: %s", rec.read_id, exc)
+                            
+                    if sample is not None:
+                        sample_queue.put(sample, block=True)
+                        
         finally:
             sample_queue.put(None)
             if progress_bar:
@@ -352,16 +373,16 @@ class Inference(InferenceBase):
 
         inputs = {k: v.to(self.device) for k, v in batch_t["inputs"].items()}
         use_amp = (self.config.float_dtype in {"float16", "fp16"}) and (self.device.type != "cpu")
-        dtype = torch.float16 if self.config.float_dtype in {"float16", "fp16"} else Non
+        dtype = torch.float16 if self.config.float_dtype in {"float16", "fp16"} else None
         with torch.no_grad(), torch.amp.autocast(
             device_type=self.device.type, enabled=use_amp, dtype=dtype
         ):
-            import time
             outputs = self.model(**inputs)
 
         results = []
         for i, read_id in enumerate(batch_t["metadata"]["read_id"]):
             num_chunks = int(batch_t["metadata"]["num_tokens"][i])
+            cropped = bool(batch_t["metadata"]["cropped"][i])
             logits = {
                 k: v[i].cpu().numpy()
                 for k, v in outputs.items()
@@ -371,7 +392,8 @@ class Inference(InferenceBase):
                 read_id=read_id,
                 _logits=logits,
                 num_chunks=num_chunks,
-                chunk_size=self.config.chunk_size
+                chunk_size=self.config.chunk_size,
+                cropped=cropped
             )
             if not self.save_raw:
                 result = result.to_compressed()

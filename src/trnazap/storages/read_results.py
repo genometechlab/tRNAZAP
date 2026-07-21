@@ -32,6 +32,7 @@ class ReadResultDetailed:
     _logits: Dict[str, np.ndarray]  # e.g., {'segmentation': array, 'classification': array, 'frag': array}
     num_chunks: int
     chunk_size: int
+    cropped: bool
 
     def __post_init__(self):
         """Validate logits shapes."""
@@ -205,7 +206,8 @@ class ReadResultDetailed:
             read_id=self.read_id,
             _logits={k: (v.copy() if v is not None else None) for k, v in self._logits.items()},
             num_chunks=self.num_chunks,
-            chunk_size=self.chunk_size
+            chunk_size=self.chunk_size,
+            cropped=self.cropped,
         )
 
     def to_compressed(self) -> "ReadResult":
@@ -243,6 +245,7 @@ class ReadResultDetailed:
             fragmented=fragmented,
             num_chunks=self.num_chunks,
             chunk_size=self.chunk_size,
+            cropped=self.cropped
         )
 
     # ------------------------------------------------------------------------
@@ -269,6 +272,7 @@ class ReadResult:
     fragmented: bool
     num_chunks: int
     chunk_size: int
+    cropped: bool
 
     @property
     def classification_pred(self) -> Optional[int]:
@@ -285,6 +289,7 @@ class ReadResult:
             fragmented=self.fragmented,
             num_chunks=self.num_chunks,
             chunk_size=self.chunk_size,
+            cropped=self.cropped,
         )
 
 
@@ -309,6 +314,7 @@ class ReadResultLike(Protocol):
     read_id: str
     num_chunks: int
     chunk_size: int
+    cropped: bool
 
     @property
     def variable_region_range(self) -> Tuple[int, int]: ...

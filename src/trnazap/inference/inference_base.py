@@ -24,7 +24,6 @@ logger = logging.getLogger(__name__)
 PathLike = Union[str, Path]
 PathLikeList = Union[PathLike, List[PathLike]]
 
-
 class InferenceBase(ABC):
 
     def __init__(
@@ -61,8 +60,10 @@ class InferenceBase(ABC):
         stride = self.config.effective_stride      # replaces chunk_size in pipeline
         max_samples = self.config.max_seq_len * stride
         sig = sig[: (sig.shape[0] // stride) * stride]  # drop last incomplete chunk
+        cropped = False
         if len(sig) > max_samples:
             sig = sig[:max_samples]
+            cropped = True
 
         num_tokens = len(sig) // stride
         sig = sig.astype(dtype)
@@ -75,6 +76,7 @@ class InferenceBase(ABC):
             metadata=dict(
                 read_id=str(rec.read_id),
                 num_tokens=num_tokens,
+                cropped=cropped
             ),
         )
 

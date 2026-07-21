@@ -231,6 +231,7 @@ class ZIRWriter:
                 "variable_region_range": getattr(rr, "variable_region_range", (-1, -1)),
                 "smoothed_variable_region_range": getattr(rr, "smoothed_variable_region_range", (-1, -1)),
                 "fragmented": bool(getattr(rr, "fragmented", False)),
+                "cropped": bool(getattr(rr, "cropped", False)),
             }
             s = json.dumps(summary, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
             buf.write(self._S_U32.pack(len(s)))
@@ -238,6 +239,9 @@ class ZIRWriter:
             return buf.getvalue()
 
         # ---- FULL PAYLOAD (logits blocks) ----
+        # cropped flag (format >= 101). Summary records carry this in their JSON.
+        buf.write(struct.pack("<B", 1 if bool(getattr(rr, "cropped", False)) else 0))
+
         logits = getattr(rr, "_logits", {})  # Mapping[str, np.ndarray-like]
         if not isinstance(logits, dict):
             logits = dict(logits)
