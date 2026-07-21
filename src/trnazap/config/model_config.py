@@ -38,6 +38,11 @@ class ModelConfig:
     dim_feedforward: int
     norm_first: bool
     dropout: float
+    
+    # -----------------------------------------------------------------------
+    # Model outouts - defaults to all
+    # -----------------------------------------------------------------------
+    tasks: Optional[List[str]]
 
     # -----------------------------------------------------------------------
     # Signal encoder stem
@@ -271,6 +276,7 @@ class ModelLoader:
             hidden_size=self.config.hidden_size,
             dim_feedforward=self.config.dim_feedforward,
             norm_first=self.config.norm_first,
+            enabled_tasks=self.config.tasks,
             # Positional encoding
             positional_encoding_type=self.config.positional_encoding_type,
         )
