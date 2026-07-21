@@ -71,15 +71,19 @@ def load_alignments(bam_path, ref_dict, ref_lens, five_offset, three_offset,
     # Merge sets
     failed_reads = set()
     unmapped_reads = set()
+    mapq0_by_trna = defaultdict(int)
     for result in sub_results:
         failed_reads.update(result['failed'])
         unmapped_reads.update(result['unmapped'])
-    
+        for trna, count in result['mapq0_by_trna'].items():
+            mapq0_by_trna[trna] += count
+
     return {
         'by_trna': by_trna,
         'by_read': by_read,
         'failed_reads': failed_reads,
-        'unmapped_reads': unmapped_reads
+        'unmapped_reads': unmapped_reads,
+        'mapq0_by_trna': dict(mapq0_by_trna)
     }
 
 
@@ -106,22 +110,23 @@ def _process_chunk(args):
     by_read = {}
     failed = set()
     unmapped = set()
-    
+    mapq0_by_trna = defaultdict(int)
+
     with pysam.AlignmentFile(bam_path) as bam:
         for read in bam.fetch(until_eof=True):
             # Hash-based distribution across threads
             if hash_first_hex(read.query_name) % threads != thread_idx:
                 continue
-            
+
             # Skip secondary/supplementary alignments
             if read.is_secondary or read.is_supplementary:
                 continue
-            
+
             # Handle unmapped
             if read.is_unmapped:
                 unmapped.add(read.query_name)
                 continue
-            
+
             # Skip primary/secondary indicator
             if read.has_tag('pi'):
                 continue
@@ -174,12 +179,14 @@ def _process_chunk(args):
             )
             
             if passes:
+                if read.mapping_quality == 0:
+                    mapq0_by_trna[trna_name] += 1
                 # Store in both structures
                 by_trna[trna_name]['track_arrs'].append(track_arr)
                 by_trna[trna_name]['identities'].append(float(ident))
                 by_trna[trna_name]['alignment_lengths'].append(float(aln_length))
                 by_trna[trna_name]['read_names'].append(read.query_name)
-                
+
                 by_read[read.query_name] = {
                     'trna': trna_name,
                     'identity': float(ident),
@@ -198,7 +205,8 @@ def _process_chunk(args):
         'by_trna': dict(by_trna),
         'by_read': by_read,
         'failed': failed,
-        'unmapped': unmapped
+        'unmapped': unmapped,
+        'mapq0_by_trna': dict(mapq0_by_trna)
     }
 
 
