@@ -58,6 +58,7 @@ class ZIRReader:
         "decompressors",
         "record_counts",
         "record_count",
+        "_format_versions",
         "metadata_dict",
         "_index",
         "_S_U16",
@@ -110,17 +111,19 @@ class ZIRReader:
         self.decompressors: List[zstd.ZstdDecompressor] = []
         self.record_counts: List[int] = []
         self.record_count: int = 0
+        self._format_versions: List[int] = []
         metadata_dicts: List[Dict[str, Any]] = []
 
         # Open each archive with buffering and read fixed header
         for p in self._paths:
             raw = open(p, "rb", buffering=0)
             f = io.BufferedReader(raw, buffer_size=1 << 20)  # 1 MiB read buffer
-            md, rc = self._read_header(f)
+            md, rc, ver = self._read_header(f)
             self._files.append(f)
             self.decompressors.append(zstd.ZstdDecompressor())
             self.record_counts.append(rc)
             self.record_count += rc
+            self._format_versions.append(ver)
             metadata_dicts.append(md)
 
         # Basic metadata compatibility (allow dynamic logits; require core fields)
@@ -182,7 +185,7 @@ class ZIRReader:
                 if selection is None:
                     # Full parse path
                     data = self._decompress_full(file_idx, compressed, usize)
-                    yield self._parse_record(data)
+                    yield self._parse_record(data, self._format_versions[file_idx])
                 else:
                     # Peek read_id with partial decompress
                     preview = self.decompressors[file_idx].decompress(compressed, max_output_size=PREVIEW_MAX)
@@ -201,7 +204,7 @@ class ZIRReader:
                     if rid in selection:
                         # Now fully decompress and parse
                         data = self._decompress_full(file_idx, compressed, usize)
-                        yield self._parse_record(data)
+                        yield self._parse_record(data, self._format_versions[file_idx])
                     # else skip: we already consumed the compressed bytes; continue
 
     def build_index(self, *, threads: int = 4) -> None:
@@ -267,7 +270,7 @@ class ZIRReader:
         csize = self._S_U32.unpack_from(header, len(RECORD_MARKER))[0]
         comp = f.read(csize)
         data = self.decompressors[info["file_idx"]].decompress(comp, max_output_size=self._S_U32.unpack_from(header, len(RECORD_MARKER)+4)[0])
-        return self._parse_record(data)
+        return self._parse_record(data, self._format_versions[info["file_idx"]])
 
     def get(self, read_id: str) -> Optional[ReadResultLike]:
         """Return the read if present, else None (InferenceStore protocol).
@@ -324,7 +327,7 @@ class ZIRReader:
             "total_records": self.record_count,
             "indexed": self._index is not None,
             "index_size": len(self._index) if self._index else 0,
-            "format_version": FORMAT_VERSION,
+            "format_versions": self._format_versions,
             "model_name": self.metadata_dict.get("model_name"),
         }
 
@@ -338,7 +341,7 @@ class ZIRReader:
             )
         return data
 
-    def _parse_record(self, data: bytes) -> ReadResultLike:
+    def _parse_record(self, data: bytes, version: int = FORMAT_VERSION) -> ReadResultLike:
         view = memoryview(data)
         n = len(view)
 
@@ -367,6 +370,14 @@ class ZIRReader:
 
         if record_kind == 0:
             # -------- FULL record (logits) --------
+            # cropped flag: present only in format >= 101; v1 defaults to False.
+            if version >= 101:
+                need(1, off)
+                cropped = bool(view[off])
+                off += 1
+            else:
+                cropped = False
+
             need(1, off)
             num_logits = view[off]
             off += 1
@@ -409,7 +420,7 @@ class ZIRReader:
                 off += bytes_needed
 
             from ..storages import ReadResultDetailed  # type: ignore
-            return ReadResultDetailed(read_id=rid, _logits=logits, num_chunks=num_chunks, chunk_size=chunk_size)
+            return ReadResultDetailed(read_id=rid, _logits=logits, num_chunks=num_chunks, chunk_size=chunk_size, cropped=cropped)
 
         elif record_kind == 1:
             # -------- SUMMARY record (compressed) --------
@@ -431,13 +442,14 @@ class ZIRReader:
                 fragmented=bool(summary.get("fragmented", False)),
                 num_chunks=num_chunks,
                 chunk_size=chunk_size,
+                cropped=bool(summary.get("cropped", False)),
             )
 
         else:
             raise ValueError(f"Unknown record_kind={record_kind}")
 
 
-    def _read_header(self, f: io.BufferedReader) -> Tuple[Dict[str, Any], int]:
+    def _read_header(self, f: io.BufferedReader) -> Tuple[Dict[str, Any], int, int]:
         magic = f.read(len(MAGIC_BYTES))
         if magic != MAGIC_BYTES:
             raise ValueError("Invalid magic bytes")
@@ -445,7 +457,8 @@ class ZIRReader:
         if len(ver_b) < 4:
             raise EOFError("Unexpected EOF while reading format version")
         version = struct.unpack("<I", ver_b)[0]
-        if version != FORMAT_VERSION:
+        # Accept legacy v1 and current v101 ("1.01"); reject anything newer/unknown.
+        if version not in (1, FORMAT_VERSION):
             raise ValueError(f"Unsupported format version {version}")
 
         rc_b = f.read(4)
@@ -461,7 +474,7 @@ class ZIRReader:
         meta = self._validate_meta(meta)
 
         f.seek(HEADER_SIZE)
-        return meta, record_count
+        return meta, record_count, version
     
     def _validate_meta(self, data: dict) -> dict:
         """Migrate metadata dict from old schema to new schema."""

@@ -28,6 +28,7 @@ def collate_fn(batch):
     lengths  = torch.tensor([item["inputs"]["length"]  for item in batch], dtype=torch.long)
     num_toks = torch.tensor([item["metadata"]["num_tokens"] for item in batch], dtype=torch.long)
     read_ids = [item["metadata"]["read_id"] for item in batch]
+    cropped = [item["metadata"]["cropped"] for item in batch]
 
     # Pad 1-D signals to batch-max length with 0.0
     # (padding value 0.0 is safe — z-scored signal has zero mean,
@@ -42,5 +43,6 @@ def collate_fn(batch):
         "metadata": {
             "read_id":    read_ids,
             "num_tokens": num_toks,
+            "cropped": cropped
         },
     }

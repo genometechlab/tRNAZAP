@@ -69,7 +69,7 @@ class SingleReadInference(InferenceBase):
                 try:
                     model_input = self._process_record(rec)
                 except Exception as exc:
-                    logger.warning("Failed on read %s: %s", rec.read_id, exc)
+                    raise Exception("Failed on read %s: %s", rec.read_id, exc)
 
         batch_t = collate_fn([model_input,])
         
@@ -84,6 +84,7 @@ class SingleReadInference(InferenceBase):
             outputs = self.model(**inputs)
 
         num_chunks = int(batch_t["metadata"]["num_tokens"][0])
+        cropped = bool(batch_t["metadata"]["cropped"][0])
         logits = {
             k: v[0].cpu().numpy()
             for k, v in outputs.items()
@@ -93,7 +94,8 @@ class SingleReadInference(InferenceBase):
             read_id=read_id,
             _logits=logits,
             num_chunks=num_chunks,
-            chunk_size=self.config.chunk_size
+            chunk_size=self.config.chunk_size,
+            cropped=cropped
         )
         
         aux_out = dict()
@@ -115,4 +117,4 @@ class SingleReadInference(InferenceBase):
             aux_out["saliency"] = (sal, chosen)
             
         if aux_out: return result, aux_out
-        else: result
+        else: return result
