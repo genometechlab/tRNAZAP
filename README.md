@@ -1,8 +1,9 @@
-<img src="images/logo.png" alt="tRNAZAP" width="300"/>
+<p align="center">
+  <img src="images/logo.png" alt="tRNAZAP" width="300"/></br>
+  tRNA ionic current model and alignment tools</br></br>
+  <img src="images/graphic_abstract.png" />
+</p>
 
-tRNA ionic current model and alignment tools
-
-<img src="images/graphic_abstract.png" />
 
 ## Table of Contents
 
