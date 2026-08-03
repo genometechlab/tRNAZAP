@@ -35,9 +35,6 @@ def wagner_fisher_affine(s: str, t: str, gap_open = 2, gap_extend = 0.5):
             - ndarray: The complete dynamic programming
             matrix
     """
-    #gap_open = 2
-    #gap_extend = 0.5
-    
     m, n = len(s), len(t)
     d = np.zeros(shape=(m + 1, n + 1), dtype=np.float32)
     move_mat = np.zeros(shape=(m+1, n+1), dtype=np.int8)
@@ -423,13 +420,6 @@ def smith_waterman_for_fragment(tRNA, fragment, gap_open = -6, gap_extend = -1, 
     Returns:
         tuple: (score_mat, traceback_mat, length_mat, tRNA_start, frag_start)
     """
-    # Affine gap scoring parameters
-    #gap_open = -6       # Penalty for opening a new gap (higher)
-    #gap_extend = -1     # Penalty for extending an existing gap (lower)
-    #match_score = +3    # Reward for matching bases
-    #mismatch_score = -1 # Penalty for mismatched bases
-    min_matches = 25 #Only consider scores for regions with 25 matches
-    
     # Get sequence lengths
     tRNA_len = len(tRNA)
     fragment_len = len(fragment)
@@ -622,7 +612,7 @@ def fragment_align(sub_sequence,
                    sw_gap_open = -6.0,
                    sw_gap_extend = -1.0,
                    sw_match = 3.0,
-                   sw_mismatch = 1.0,):
+                   sw_mismatch = -1.0,):
     """Align a fragment sequence to a reference sequence and generate CIGAR string.
     
     This function orchestrates the complete alignment pipeline: running Smith-Waterman,
@@ -997,7 +987,7 @@ def shot_in_the_dark_alignment(pysam_read,
                                sw_gap_open = -6.0,
                                sw_gap_extend = -1.0,
                                sw_match = 3.0,
-                               sw_mismatch = 1.0,):
+                               sw_mismatch = -1.0,):
     #Top three ref dict:
     # {index : [ref_index, ref_sequence]}
     # This will be 0, 1, 2 based on the order of classification
@@ -1071,7 +1061,7 @@ def align_read(
     sw_gap_open = -6.0,
     sw_gap_extend = -1.0,
     sw_match = 3.0,
-    sw_mismatch = 1.0,
+    sw_mismatch = -1.0,
     ident_threshold = 0.75,
     secondary=False
 ):

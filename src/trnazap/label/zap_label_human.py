@@ -4,6 +4,7 @@ from numba import njit
 import pickle
 from tqdm import tqdm
 from collections import defaultdict
+import sys
 
 FIVE_PRIME_ADAPTER_LEN = 36   # 5' ligation oligo length
 THREE_PRIME_ADAPTER_LEN = 41  # 3' ligation oligo length
@@ -185,50 +186,9 @@ def disambiguate_human_ivt(read, specific_tRNA_entry):
         return None
     return read.reference_name
 
-#Add an accept isodecoder assignment based on alignment (this is the style we're moving towards w/ human)
+#Add an accept isodecoder assignment based on alignment (this is the style we're moving towards w/ human) 
 
-def disambiguate(read, tRNA_class_entry):
-
-    if 'edit_dist' in tRNA_class_entry:
-
-        encoded_query_seq = np.array([ord(x) for x in read.query_sequence])
-        seq_1_1 = tRNA_class_entry['seq_1-1']
-        seq_2_1 = tRNA_class_entry['seq_2-1']
-        seq_1_1_dist = edit_dist(encoded_query_seq, seq_1_1) / max(len(encoded_query_seq), len(seq_1_1))
-        seq_2_1_dist = edit_dist(encoded_query_seq, seq_2_1) / max(len(encoded_query_seq), len(seq_2_1))
-
-        if seq_1_1_dist == seq_2_1_dist:
-            return None
-        elif seq_1_1_dist < seq_2_1_dist:
-            return '1-1'
-        else:
-            return '2-1'
-
-    else:
-        key_count = {key:len(tRNA_class_entry[key]) for key in tRNA_class_entry}
-        example_key = list(key_count.keys())[0]
-        for pair in read.get_aligned_pairs():
-            if pair[1] is not None and pair[1] in tRNA_class_entry[example_key] and pair[0] is not None:
-                seq_base = read.query_sequence[pair[0]]
-                for key in list(key_count.keys()):
-                    if tRNA_class_entry[key][pair[1]] == seq_base:
-                        key_count[key] -= 1
-                        
-        no_match = True
-        match_key = None
-        for key, value in key_count.items():
-            if value == 0:
-                assert no_match is True
-                no_match = False
-                match_key = key
-
-        if no_match:
-            return None
-
-        else:
-            return match_key    
-
-def zap_label(bam, ref, out, decoder_dict, min_ident, human_ivt = False):
+def zap_label(bam, ref, out, read_id_list_path, free_pass_path, min_ident, human_ivt = False):
     ref_lens = {}
     ref_seqs = {}
     tRNA_labels = {}
@@ -242,19 +202,31 @@ def zap_label(bam, ref, out, decoder_dict, min_ident, human_ivt = False):
         tRNA_labels[tRNA.name] = i + 3
         print(f"{tRNA.name} {ref_lens[tRNA.name]}")
 
-    if decoder_dict is not None:
-        with open(decoder_dict, 'rb') as infile:
-            decoder_dict = pickle.load(infile)
+    if read_id_list_path is not None:
+        read_id_list = set()
+        with open(read_id_list_path, 'r') as infile:
+            for r_id in infile:
+                read_id_list.add(r_id.strip())
+    else:
+        read_id_list = None
+    print(list(read_id_list)[:100])
+    if free_pass_path is not None:
+        free_pass = set()
+        with open(free_pass_path, 'r') as infile:
+            for line in infile:
+                free_pass.add(line.strip())
 
+    
     out_dict = {}
     for read in tqdm(af.fetch()):
-        
+
+        if read.query_name not in read_id_list and read.reference_name not in free_pass:
+            continue
         if read.is_unmapped or read.mapping_quality == 0 or read.is_secondary or read.is_supplementary or read.has_tag('pi') or read.get_tag('ns') >= 1000000:
             continue
 
         if abs(max(read.reference_start, FIVE_PRIME_ADAPTER_LEN) - min(read.reference_end, ref_lens[read.reference_name] - THREE_PRIME_ADAPTER_LEN)) < MIN_TRNA_COVERAGE:
             continue
-
         ref_positions = np.array(read.get_reference_positions(full_length=True))
         
         ref_positions[ref_positions == None] = -1
@@ -268,41 +240,7 @@ def zap_label(bam, ref, out, decoder_dict, min_ident, human_ivt = False):
         
         if matches / (matches + mismatches + insertions + deletions) < min_ident:
             continue
-
         ref_name_tmp = read.reference_name
-
-        if decoder_dict is not None:
-            gln_ctg = False
-            if 'His-GTG' in read.reference_name or 'Ile-GAT' in read.reference_name or 'SeC-TCA' in read.reference_name or 'Tyr-ATA' in read.reference_name or "Leu-CAA-5-1" in read.reference_name:
-                pass
-            elif 'mito' not in read.reference_name and 'Mt_tRNA' not in read.reference_name:
-                split_ref = read.reference_name.split('_')[-1].split('-')
-                assert len(split_ref) == 5 ,f"{read.reference_name}"
-                encoder = f"{split_ref[1]}-{split_ref[2]}"
-                decoder = f"{split_ref[3]}-{split_ref[4]}"
-                if human_ivt:
-                    targets = decoder_dict[encoder][read.reference_name]
-
-                    dis_amb_result = disambiguate_human_ivt(read, targets)
-
-                    if dis_amb_result is None:
-                        continue
-                    ref_name_tmp = read.reference_name
-                    
-                else:
-                    if encoder == "Gln-CTG":
-                        gln_ctg = True
-                        encoder = "Gln-TTG"
-                    if encoder in decoder_dict:
-                        dis_amb_result = disambiguate(read, decoder_dict[encoder])
-                        if dis_amb_result is None:
-                            continue
-                        ref_name_tmp = '-'.join(ref_name_tmp.split('-')[:-2]) + '-' + dis_amb_result
-                        if dis_amb_result == "Gln-CTG-1-1":
-                            ref_name_tmp = '-'.join([ref_name_tmp.split('-')[0], dis_amb_result])
-                        if gln_ctg and dis_amb_result in set(["2-1", "1-1", "3-1"]):
-                            encoder = "Gln-TTG"
-                            ref_name_tmp = '-'.join([ref_name_tmp.split('-')[0], encoder, dis_amb_result])
         
         count_dict[ref_name_tmp] += 1
         out_dict[read.query_name] = annot_from_read(ref_positions, 
@@ -320,3 +258,29 @@ def zap_label(bam, ref, out, decoder_dict, min_ident, human_ivt = False):
 
     for key, value in count_dict.items():
         print(f"{key}: {value}")
+
+    print("\n")
+    print(f"Total references with reads: {len(count_dict)}")
+
+if __name__ == "__main__":
+    bam = sys.argv[1]
+    ref = "/scratch/akeson.s/Human_tRNA_isodecoder_labels_for_zap/hg38-mature-tRNAs_biosplint.fa"
+    out = sys.argv[2]
+    read_id_list_path = "/scratch/akeson.s/Human_tRNA_isodecoder_labels_for_zap/accepted_read_ids_readbar0.75.txt"
+    free_pass_path = "/scratch/akeson.s/Human_tRNA_isodecoder_labels_for_zap/references_not_in_scoring.txt"
+    zap_label(bam, ref, out, read_id_list_path, free_pass_path, 0.75)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    
