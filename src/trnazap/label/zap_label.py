@@ -185,6 +185,8 @@ def disambiguate_human_ivt(read, specific_tRNA_entry):
         return None
     return read.reference_name
 
+#Add an accept isodecoder assignment based on alignment (this is the style we're moving towards w/ human)
+
 def disambiguate(read, tRNA_class_entry):
 
     if 'edit_dist' in tRNA_class_entry:

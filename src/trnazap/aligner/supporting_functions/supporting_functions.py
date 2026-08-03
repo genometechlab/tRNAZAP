@@ -44,7 +44,8 @@ def process_ref(ref_path, program_info):
         program_info: Additional information for
         constructing the PG tag, internally
         handlered, no user provided information required.
-        (tuple(str, str, str, str))
+        (tuple(str, str, str, list, str)) of program name, version, id,
+        command line argv, and a description of the alignment parameters used
 
     returns: Bam header dict, lookup table from numeric
     tRNA key to tRNA sequence and label
@@ -54,8 +55,18 @@ def process_ref(ref_path, program_info):
 
     # Set up bam header dictionary including HD PG and SQ lines
     bam_header = {"HD": {"VN": "1.0", "SO": "unsorted"}}
-    program_name, program_version, program_id, command_line = program_info
+    program_name, program_version, program_id, command_line, description = program_info
     command_line = " ".join(command_line)
+
+    bam_header["PG"] = [
+        {
+            "ID": program_id,
+            "PN": program_name,
+            "VN": program_version,
+            "CL": command_line,
+            "DS": description,
+        }
+    ]
 
     bam_header["SQ"] = []
 
@@ -78,13 +89,7 @@ def make_parameter_list(
     out_prefix,
     all_alignments,
     monitor,
-    ident_threshold,
-    wf_gap_open, 
-    wf_gap_extend, 
-    sw_gap_open,
-    sw_gap_extend,
-    sw_match,
-    sw_mismatch
+    align_params
 ):
     """
     Make a list of parameters to multiprocess alignments.
@@ -100,6 +105,7 @@ def make_parameter_list(
         and move tables)
         out_dir: User defined directory to output files
         out_prefix: User defined prefix to append to the start of files
+        align_params: Resolved AlignParams for this run, shared by every worker
 
     returns:
         A list of tuples containing the required parameters for each process being
@@ -117,13 +123,7 @@ def make_parameter_list(
             all_alignments,
             #monitor,
             None,
-            ident_threshold,
-            wf_gap_open, 
-            wf_gap_extend, 
-            sw_gap_open,
-            sw_gap_extend,
-            sw_match,
-            sw_mismatch
+            align_params
         )
         for i in range(threads)
     ]
@@ -240,6 +240,7 @@ def make_sub_bam(args_list):
                 - 'reference_seq': The reference sequence string for alignment
             - unaligned_bam_path (str): Path to the input unaligned BAM file
             - outpath (str): Path where the output aligned BAM file will be written
+            - align_params (AlignParams): Resolved scoring parameters for the run
 
     Returns:
         str: The output file path (same as the input outpath parameter)
@@ -269,16 +270,20 @@ def make_sub_bam(args_list):
         unaligned_bam_path,  # Input BAM file with unaligned reads
         outpath,
         allow_secondary,
-        monitor, 
-        ident_threshold,
-        wf_gap_open, 
-        wf_gap_extend, 
-        sw_gap_open,
-        sw_gap_extend,
-        sw_match,
-        sw_mismatch
-    ) = args_list  
-        
+        monitor,
+        align_params  # Resolved AlignParams shared by every worker
+    ) = args_list
+
+    # Unpack to locals so the align_read/shot_in_the_dark call sites below read
+    # the same as they did when these arrived as seven separate tuple elements.
+    ident_threshold = align_params.ident_threshold
+    wf_gap_open = align_params.wf_gap_open
+    wf_gap_extend = align_params.wf_gap_extend
+    sw_gap_open = align_params.sw_gap_open
+    sw_gap_extend = align_params.sw_gap_extend
+    sw_match = align_params.sw_match
+    sw_mismatch = align_params.sw_mismatch
+
     progress = monitor
 
     #Load the inference dict using the read_id_hash
