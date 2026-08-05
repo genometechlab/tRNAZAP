@@ -373,12 +373,52 @@ trnazap align \
 | `--out_dir`, `-od` | Output directory (created if missing) (**required**) |
 | `--out_pre`, `-op` | Prefix prepended to output files (**required**) |
 | `--model`, `-m` | Target substrate: `yeast` or `e_coli` (default: `e_coli`) |
+| `--ivt_alignment` | Use the IVT scoring profile for the substrate instead of the biological one |
 | `--threads`, `-t` | Worker threads (default: `8`) |
 | `--secondary`, `-s` | Also align the second-highest classification and keep the better alignment |
-| `--ident_threshold` | Minimum identity for a read to be kept (default: `0.75`) |
-| `--wf_gap_open` / `--wf_gap_extend` | Wagner-Fisher gap penalties (defaults: `2.0` / `0.5`) |
-| `--sw_gap_open` / `--sw_gap_extend` | Smith-Waterman gap penalties (defaults: `-6.0` / `-1.0`) |
-| `--sw_match` / `--sw_mismatch` | Smith-Waterman match / mismatch scores (defaults: `3.0` / `1.0`) |
+| `--ident_threshold` | Minimum identity for a read to be kept (default: per-model profile) |
+| `--wf_gap_open` / `--wf_gap_extend` | Wagner-Fisher gap costs, positive penalizes (defaults: per-model profile) |
+| `--sw_gap_open` / `--sw_gap_extend` | Smith-Waterman gap scores, negative penalizes (defaults: per-model profile) |
+| `--sw_match` / `--sw_mismatch` | Smith-Waterman match / mismatch scores (defaults: per-model profile) |
+
+### Scoring profiles
+
+Scoring defaults come from a profile selected by the substrate (`--model`) and
+whether the sample is in vitro transcribed (`--ivt_alignment`). Profiles live in
+[`alignment_defaults.py`](./src/trnazap/aligner/alignment_functions/alignment_defaults.py)
+and are named after the checkpoint convention used in `configs/`, so a profile
+can be checked against the model that produced the inference archive:
+
+| `--model` | `--ivt_alignment` | Profile |
+|-----------|-------------------|---------|
+| `e_coli`  | omitted           | `BIOecoli` |
+| `e_coli`  | set               | `IVTecoli` |
+| `yeast`   | omitted           | `BIOyeast` |
+| `yeast`   | set               | `IVTyeast` |
+
+All four profiles currently carry the same values:
+
+| Parameter | Value |
+|-----------|-------|
+| `wf_gap_open` / `wf_gap_extend` | `1.0` / `0.7` |
+| `sw_gap_open` / `sw_gap_extend` | `-6.0` / `-3.0` |
+| `sw_match` / `sw_mismatch` | `3.0` / `-3.0` |
+| `ident_threshold` | `0.75` |
+
+> ⚠️ The IVT and biological profiles are **not yet differentiated** — they hold
+> identical values, so `--ivt_alignment` currently changes only the profile
+> recorded in the run log and the output BAM `PG` tag. The distinction exists so
+> that measured per-substrate-type values have a home.
+
+The two algorithms use opposite scoring conventions and their parameters are not
+interchangeable. Wagner-Fisher `wf_*` values are edit **costs** that are
+minimized, so positive values penalize. Smith-Waterman `sw_*` values are
+**scores** that are summed and maximized, so rewards are positive and penalties
+negative — including `sw_mismatch`.
+
+Passing any scoring flag explicitly overrides that one field of the profile and
+leaves the rest untouched. The resolved profile name and every final value are
+printed at the start of each run and written to the output BAM `PG` tag.
 
 ## 2.2 `trnazap alignment_visualize`
 

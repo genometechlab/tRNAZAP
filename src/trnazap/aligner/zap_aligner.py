@@ -13,24 +13,26 @@ import numba
 numba.set_num_threads(1)
 
 from .supporting_functions.supporting_functions import get_model_to_ref, process_ref, make_parameter_list, make_sort_params_list, make_sub_bam, sort_bam, merge_bam
+from .alignment_functions.alignment_defaults import default_align_params, format_align_params, profile_name, validate_align_params
 from .inference_functions.process_inference import load_inference_obj
 from .progress_monitoring.progress import create_shared_counter, create_monitor, get_counter_value, increment_counter
 
 def run_align(
-    unaligned_bam, 
-    inference_list, 
-    out_dir, 
-    out_pre, 
-    threads, 
-    model, 
+    unaligned_bam,
+    inference_list,
+    out_dir,
+    out_pre,
+    threads,
+    model,
     secondary,
-    ident_threshold,
-    wf_gap_open,
-    wf_gap_extend, 
-    sw_gap_open,
-    sw_gap_extend,
-    sw_match,
-    sw_mismatch,
+    ident_threshold = None,
+    wf_gap_open = None,
+    wf_gap_extend = None,
+    sw_gap_open = None,
+    sw_gap_extend = None,
+    sw_match = None,
+    sw_mismatch = None,
+    ivt_alignment = False,
     pickled = False
 ):
     """Execute tRNA basecall alignment and inference workflow.
@@ -49,12 +51,22 @@ def run_align(
         doesn't exist.
         out_pre (str): Prefix to be appended to all output files.
         threads (int): Number of processing threads to use for parallel execution.
-        model (str): Target tRNA substrate model to use. Options include 'human-mt',
-            'yeast', and 'e_coli'.
+        model (str): Target tRNA substrate. Either 'yeast' or 'e_coli'. Selects
+            both the reference and the default scoring profile.
+        secondary (bool): Also align the second highest classification and keep
+            the better of the two alignments.
+        ident_threshold, wf_gap_open, wf_gap_extend, sw_gap_open, sw_gap_extend,
+            sw_match, sw_mismatch (float or None): Scoring parameters. None takes
+            the value from the selected profile, anything else overrides it.
+        ivt_alignment (bool): Use the in vitro transcribed scoring profile for
+            the substrate rather than the biological one.
+        pickled (bool): Treat the inference input as a pre-pickled object.
 
     Returns:
         None: Function completes without an explicit return value on success.
-        None: Returns None explicitly if the selected model is not recognized.
+
+    Raises:
+        ValueError: If the selected model is not a recognized substrate.
 
     Note:
         The function maps the selected model to corresponding reference files,
@@ -68,26 +80,45 @@ def run_align(
     #If out dir directory does not exist, will try and create.
     if not os.path.isdir(out_dir):
         os.makedirs(out_dir)
-    
-    # Identifying the appropriate reference based on the model selected
-    model_to_ref = get_model_to_ref()
 
-    # Attempt to load model path, if the model is not recognized print a help
-    # message and terminate the program.
-    try:
-        ref = model_to_ref[model]
-    except Exception as e:
-        print(f"{e}\n")
-        print(
-            f"{model} is not recognized, please choose from"
-            + " yeast, and e_coli."
-        )
-        return None
+    # Resolve the scoring parameters. Anything the caller passed explicitly
+    # overrides the substrate's profile; everything else comes from the profile.
+    # This raises if the model is not a recognized substrate, so it also guards
+    # the reference lookup below.
+    align_profile = profile_name(model, ivt_alignment)
+    params = default_align_params(
+        model,
+        ivt_alignment,
+        ident_threshold = ident_threshold,
+        wf_gap_open = wf_gap_open,
+        wf_gap_extend = wf_gap_extend,
+        sw_gap_open = sw_gap_open,
+        sw_gap_extend = sw_gap_extend,
+        sw_match = sw_match,
+        sw_mismatch = sw_mismatch,
+    )
+    validate_align_params(params)
+
+    # Scoring defaults are implicit now that they come from a profile, so the
+    # run log is the only record of what an alignment actually used.
+    print(f"Alignment profile: {align_profile}")
+    print(f"Alignment parameters: {format_align_params(params)}")
+
+    # Identifying the appropriate reference based on the model selected
+    ref = get_model_to_ref()[model]
 
     # Construct a bam header and reference sequence lookup dict based on the
-    # selected model
+    # selected model. The profile and resolved parameters go into the PG tag so
+    # the output bam records which scoring values produced it.
     bam_header, ref_dict = process_ref(
-        ref, (program_name, version, program_name, sys.argv)
+        ref,
+        (
+            program_name,
+            version,
+            program_name,
+            sys.argv,
+            f"profile={align_profile} {format_align_params(params)}",
+        ),
     )
 
     # Inference dict includes information for each read about the highest probablity
@@ -105,13 +136,7 @@ def run_align(
         out_pre,
         secondary,
         None,
-        ident_threshold,
-        wf_gap_open, 
-        wf_gap_extend, 
-        sw_gap_open,
-        sw_gap_extend,
-        sw_match,
-        sw_mismatch
+        params
     )
 
     with Pool(threads) as p:
