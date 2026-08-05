@@ -31,13 +31,7 @@ trnazap align \
     --out_dir "$DATA_DIR" \
     --out_pre "${SAMPLE}_aligned_zap" \
     --threads "$THREADS" \
-    --model "$MODEL" \
-    --wf_gap_open 1 \
-    --wf_gap_extend 0.7 \
-    --sw_gap_open -6 \
-    --sw_gap_extend -3 \
-    --sw_match 3 \
-    --sw_mismatch -3
+    --model "$MODEL"
 echo "Zap Alignment complete."
 
 echo "=== Step 3: Alignment Visualization ==="
