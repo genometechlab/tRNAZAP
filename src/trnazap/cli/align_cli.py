@@ -139,6 +139,16 @@ def register_subparser(subparsers):
                        help="Smith-Waterman mismatch score, negative penalizes"
                        + " (default: per-model profile)")
 
+    # Applies to both alignment stages, not one convention or the other.
+    parser.add_argument("--max-query-length", "--max_query_length",
+                       type=int, default=None,
+                       help="Longest query in bases that either the"
+                       + " Wagner-Fisher or Smith-Waterman stage will attempt;"
+                       + " longer reads are left unmapped. Bounds the time and"
+                       + " memory one pathological read can consume, since both"
+                       + " stages allocate matrices proportional to the query"
+                       + " length. (default: per-model profile, currently 10000)")
+
     # Set the function to call when this subcommand is used
     parser.set_defaults(func=run_align_wrapper)
 
@@ -167,5 +177,6 @@ def run_align_wrapper(FLAGS):
         FLAGS.sw_match,
         FLAGS.sw_mismatch,
         FLAGS.ivt_alignment,
-        FLAGS.pickled_inf_obj
+        FLAGS.pickled_inf_obj,
+        FLAGS.max_query_length
     )

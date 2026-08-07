@@ -987,11 +987,19 @@ def shot_in_the_dark_alignment(pysam_read,
                                sw_gap_open = -6.0,
                                sw_gap_extend = -1.0,
                                sw_match = 3.0,
-                               sw_mismatch = -1.0,):
+                               sw_mismatch = -1.0,
+                               max_query_length = 10000,):
     #Top three ref dict:
     # {index : [ref_index, ref_sequence]}
     # This will be 0, 1, 2 based on the order of classification
-    pre_results = [fragment_align(pysam_read.query_sequence, 
+
+    # Unlike align_read, this aligns the FULL read rather than a predicted
+    # subregion, and does so three times, so the same query length bound
+    # applies here with three times the cost at stake.
+    if len(pysam_read.query_sequence) > max_query_length:
+        return pysam_read
+
+    pre_results = [fragment_align(pysam_read.query_sequence,
                                   top_three_ref_dict[i][1], 
                                   0, 
                                   0, 
@@ -1063,6 +1071,7 @@ def align_read(
     sw_match = 3.0,
     sw_mismatch = -1.0,
     ident_threshold = 0.75,
+    max_query_length = 10000,
     secondary=False
 ):
     """Create a new alignment for a sequencing read against a tRNA reference sequence.
@@ -1084,6 +1093,10 @@ def align_read(
             This tells downstream tools which reference sequence this read aligns to.
         ref_sequence (str): The actual nucleotide sequence of the reference tRNA.
             This is what we'll align the extracted portion of the read against.
+        max_query_length (int): Longest extracted tRNA region, in bases, that will
+            be aligned. Reads whose predicted region exceeds this are returned
+            unmapped rather than aligned. Bounds the cost of both the
+            Wagner-Fisher and Smith-Waterman stages.
         secondary (bool): If True, marks this as a secondary alignment (SAM flag 256).
             Used when a read might align to multiple tRNA references.
     
@@ -1129,7 +1142,18 @@ def align_read(
     # This could fail if the predicted boundaries were invalid
     if len(sub_sequence) == 0: #SHOT IN THE DARK ALIGNMENT
         return pysam_read
-    
+
+    # Guard both alignment stages below against a pathological query. The
+    # Wagner-Fisher call that follows, and the Smith-Waterman fragment_align
+    # fallback further down, each allocate three matrices of
+    # (len(ref_sequence) + 1) x (len(sub_sequence) + 1); cost in both time and
+    # memory grows with the query. A predicted tRNA region far longer than a
+    # real tRNA is a bad prediction, so leave the read unmapped rather than
+    # spend minutes and hundreds of MB on it.
+    if len(sub_sequence) > max_query_length:
+        return pysam_read
+
+
     # Transfer all the read metadata to our new alignment record
     # This preserves important information for downstream analysis
     a.query_name = pysam_read.query_name          # Unique read identifier

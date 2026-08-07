@@ -34,7 +34,8 @@ def run_align(
     sw_match = None,
     sw_mismatch = None,
     ivt_alignment = False,
-    pickled = False
+    pickled = False,
+    max_query_length = None
 ):
     """Execute tRNA basecall alignment and inference workflow.
 
@@ -59,6 +60,10 @@ def run_align(
         ident_threshold, wf_gap_open, wf_gap_extend, sw_gap_open, sw_gap_extend,
             sw_match, sw_mismatch (float or None): Scoring parameters. None takes
             the value from the selected profile, anything else overrides it.
+        max_query_length (int or None): Longest query, in bases, that either the
+            Wagner-Fisher or the Smith-Waterman stage will attempt. Reads above
+            this are left unmapped, bounding the time and memory a single
+            pathological read can consume. None takes the profile value.
         ivt_alignment (bool): Use the in vitro transcribed scoring profile for
             the substrate rather than the biological one.
         pickled (bool): Treat the inference input as a pre-pickled object.
@@ -97,6 +102,7 @@ def run_align(
         sw_gap_extend = sw_gap_extend,
         sw_match = sw_match,
         sw_mismatch = sw_mismatch,
+        max_query_length = max_query_length,
     )
     validate_align_params(params)
 
