@@ -6,6 +6,7 @@ os.environ['OMP_NUM_THREADS'] = '1'
 import argparse
 import sys
 from multiprocessing import Pool
+from concurrent.futures import ProcessPoolExecutor
 import multiprocessing as mp
 mp.set_start_method('fork', force=True)
 import time
@@ -139,8 +140,16 @@ def run_align(
         params
     )
 
-    with Pool(threads) as p:
-        files = p.map(make_sub_bam, p_list)
+    # multiprocessing.Pool.map waits forever if a worker dies abruptly (OOM kill,
+    # segfault) -- the run just stops with no traceback. ProcessPoolExecutor
+    # raises BrokenProcessPool instead. Verified equivalent otherwise: same
+    # results in the same order, same exception propagation, and it honors the
+    # 'fork' start method set above so workers still inherit the parent's imports.
+    # Note ex.map returns a lazy iterator, hence the list().
+    #with Pool(threads) as p:
+    #    files = p.map(make_sub_bam, p_list)
+    with ProcessPoolExecutor(max_workers=threads) as ex:
+        files = list(ex.map(make_sub_bam, p_list))
 
     print("Finished Aligning")
 
