@@ -283,6 +283,7 @@ def make_sub_bam(args_list):
     sw_gap_extend = align_params.sw_gap_extend
     sw_match = align_params.sw_match
     sw_mismatch = align_params.sw_mismatch
+    max_query_length = align_params.max_query_length
 
     progress = monitor
 
@@ -356,7 +357,8 @@ def make_sub_bam(args_list):
                     sw_gap_extend,
                     sw_match,
                     sw_mismatch,
-                    ident_threshold = ident_threshold
+                    ident_threshold = ident_threshold,
+                    max_query_length = max_query_length
                 )
                 if i_dict[-1] == '1':
                     aligned_read.set_tag('pf', 1) #Predicted Fragment
@@ -376,7 +378,8 @@ def make_sub_bam(args_list):
                         sw_match,
                         sw_mismatch,
                         secondary = True,
-                        ident_threshold = ident_threshold)
+                        ident_threshold = ident_threshold,
+                        max_query_length = max_query_length)
 
                 if allow_secondary and secondary_better(aligned_read, secondary_read, min_ident_improvement = 0.001):
                     aligned_read, secondary_read = secondary_read, aligned_read
@@ -412,7 +415,8 @@ def make_sub_bam(args_list):
                     sw_gap_open,
                     sw_gap_extend,
                     sw_match,
-                    sw_mismatch)
+                    sw_mismatch,
+                    max_query_length = max_query_length)
                 if aligned_read.is_unmapped:
                     outf.write(aligned_read)
                     continue
