@@ -35,6 +35,13 @@ class AlignParams:
         sw_match: Smith-Waterman match score (positive rewards).
         sw_mismatch: Smith-Waterman mismatch score (negative penalizes).
         ident_threshold: Minimum identity for an alignment to be kept.
+        max_query_length: Longest query, in bases, either stage will attempt.
+            Applies to both Wagner-Fisher and Smith-Waterman. Both allocate
+            three matrices of (reference length + 1) x (query length + 1), so
+            cost grows with the query and a single pathological read can stall
+            a worker for minutes and allocate hundreds of MB. A mature tRNA is
+            under ~100 bases, so a query far above that is a bad predicted
+            region rather than a real one; such reads are left unmapped.
     """
 
     wf_gap_open: float = 1.0
@@ -44,6 +51,7 @@ class AlignParams:
     sw_match: float = 3.0
     sw_mismatch: float = -3.0
     ident_threshold: float = 0.75
+    max_query_length: int = 10000
 
 
 # Substrate types, in the order they appear in a profile name.
@@ -90,6 +98,7 @@ def default_align_params(
     sw_match: Optional[float] = None,
     sw_mismatch: Optional[float] = None,
     ident_threshold: Optional[float] = None,
+    max_query_length: Optional[int] = None,
 ) -> AlignParams:
     """Look up a profile's parameters, applying any explicit overrides.
 
@@ -97,8 +106,9 @@ def default_align_params(
         model: Substrate as passed to --model ('yeast' or 'e_coli')
         ivt_alignment: True to select the in vitro transcribed profile
         wf_gap_open, wf_gap_extend, sw_gap_open, sw_gap_extend, sw_match,
-        sw_mismatch, ident_threshold: An explicit value overrides that one
-        field of the profile. None means 'use the profile value'.
+        sw_mismatch, ident_threshold, max_query_length: An explicit value
+        overrides that one field of the profile. None means 'use the profile
+        value'.
 
     returns: An AlignParams with the profile values, overridden field by field
 
@@ -123,6 +133,7 @@ def default_align_params(
         "sw_match": sw_match,
         "sw_mismatch": sw_mismatch,
         "ident_threshold": ident_threshold,
+        "max_query_length": max_query_length,
     }
     overrides = {k: v for k, v in overrides.items() if v is not None}
     return replace(params, **overrides) if overrides else params
@@ -174,6 +185,11 @@ def validate_align_params(params: AlignParams) -> None:
         suspect.append(
             f"ident_threshold={params.ident_threshold} is outside [0, 1];"
             " identity is a proportion"
+        )
+    if params.max_query_length < 100:
+        suspect.append(
+            f"max_query_length={params.max_query_length} is below the length of"
+            " a mature tRNA, so every read will be left unmapped"
         )
 
     for message in suspect:
