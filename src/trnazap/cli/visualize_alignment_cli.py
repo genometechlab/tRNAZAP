@@ -55,8 +55,22 @@ def register_subparser(subparsers):
                         default=None,
                         help="Path to a custom BWA reference FASTA. Overrides the bundled reference for the selected model. Use only if you have a non-standard reference.")
 
+    parser.add_argument("--five_offset",
+                        default=36,
+                        type=int,
+                        help="Bases to trim from the 5' end of each BWA reference before scoring. "
+                             "Default 36 matches the 5' biosplint on the bundled BWA references. "
+                             "Set to the 5' padding of your own reference when using --reference (0 if unpadded).")
 
-    parser.set_defaults(func=run_alignment_visualize)  
+    parser.add_argument("--three_offset",
+                        default=42,
+                        type=int,
+                        help="Bases to trim from the 3' end of each BWA reference before scoring. "
+                             "Default 42 matches the 3' biosplint on the bundled BWA references. "
+                             "Set to the 3' padding of your own reference when using --reference (0 if unpadded).")
+
+
+    parser.set_defaults(func=run_alignment_visualize)
 
 def run_alignment_visualize(args):
     from ..visualize.matplotlib_stylesheets.genometechlab_plotting import setup_style
@@ -68,6 +82,8 @@ def run_alignment_visualize(args):
         bwa_bam=args.bwa_path,
         zap_bam=args.zap_path,
         threads=args.threads,
+        five_offset=args.five_offset,
+        three_offset=args.three_offset,
         out_prefix=args.out_prefix,
         out_dir=args.out_dir)
         
