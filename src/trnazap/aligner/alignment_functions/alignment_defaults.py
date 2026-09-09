@@ -67,11 +67,13 @@ ALIGN_PROFILES: Dict[Tuple[str, str], AlignParams] = {
     ("e_coli", IVT): AlignParams(),
     ("yeast", BIOLOGICAL): AlignParams(),
     ("yeast", IVT): AlignParams(),
+    ("human", BIOLOGICAL): AlignParams(),
+    ("human", IVT): AlignParams()
 }
 
 # Maps the substrate as spelled by --model onto the fragment used in profile
 # names and checkpoint filenames.
-_SUBSTRATE_LABELS = {"e_coli": "ecoli", "yeast": "yeast"}
+_SUBSTRATE_LABELS = {"e_coli": "ecoli", "yeast": "yeast", "human":"human"}
 
 
 def profile_name(model: str, ivt_alignment: bool = False) -> str:
