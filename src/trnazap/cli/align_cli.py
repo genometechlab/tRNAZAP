@@ -84,7 +84,7 @@ def register_subparser(subparsers):
         type=str,
         required=False,
         default="e_coli",
-        choices=["yeast", "e_coli"],
+        choices=["yeast", "e_coli", "human"],
         help="Target substrate. Currently two models are supported:"
         + " yeast tRNA (yeast) and E. coli tRNA (e_coli).",
     )

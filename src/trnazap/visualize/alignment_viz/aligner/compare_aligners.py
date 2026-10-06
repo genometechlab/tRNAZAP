@@ -61,23 +61,20 @@ def load_references(model, reference=None):
     with open(str(viz_path / 'alignment_viz' / 'align_to_viz_labels.json'), 'r') as infile:
         ref_label_dict = json.load(infile)
 
-    if reference is None:
-        # Load BWA references
-        bwa_ref_dict = {}
-        bwa_ref_lens = {}
-        for seq in pysam.FastxFile(bwa_ref):
-            label = ref_label_dict[seq.name]
-            bwa_ref_dict[label] = seq.sequence
-            bwa_ref_lens[label] = len(seq.sequence)
-    else:
-        # Load BWA references with custom reference path
-        bwa_ref_dict = {}
-        bwa_ref_lens = {}
-        for seq in pysam.FastxFile(reference):
-            label = ref_label_dict[seq.name]
-            bwa_ref_dict[label] = seq.sequence
-            bwa_ref_lens[label] = len(seq.sequence)
-            
+    # A custom reference replaces the bundled one for the BWA side only; the Zap
+    # side always uses the bundled reference for the selected model.
+    if reference is not None:
+        bwa_ref = reference
+
+    # Load BWA references
+    bwa_ref_dict = {}
+    bwa_ref_lens = {}
+    for seq in pysam.FastxFile(bwa_ref):
+        label = ref_label_dict[seq.name]
+        bwa_ref_dict[label] = seq.sequence
+        bwa_ref_lens[label] = len(seq.sequence)
+
+
     # Load Zap references
     zap_ref_dict = {}
     zap_ref_lens = {}
@@ -116,6 +113,8 @@ def generate_aligner_comparison_figures(
         threads=8,
         ident_threshold=0.75,
         min_coverage=25,
+        five_offset=36,
+        three_offset=42,
         # Plot flags
         per_class_identity=True,
         class_counts=True,
@@ -154,6 +153,14 @@ def generate_aligner_comparison_figures(
         Minimum identity threshold for filtering reads
     min_coverage : int
         Minimum alignment length for filtering reads
+    five_offset : int
+        Bases trimmed from the 5' end of each BWA reference before scoring.
+        Defaults to the 36 nt 5' biosplint on the bundled BWA references; must be
+        set to match the padding of a custom `reference`.
+    three_offset : int
+        Bases trimmed from the 3' end of each BWA reference before scoring.
+        Defaults to the 42 nt 3' biosplint on the bundled BWA references; must be
+        set to match the padding of a custom `reference`.
     per_class_identity : bool
         Generate per-class identity boxen plot
     class_counts : bool
@@ -221,8 +228,24 @@ def generate_aligner_comparison_figures(
     print(f"  Loaded {len(zap_ref_dict)} Zap references")
     print(f"  Time: {(time() - t0):.2f} seconds")
 
-    print(bwa_ref_dict)
-    
+    # The scoring window is [five_offset, ref_len - three_offset) per reference.
+    # Offsets that don't match the reference's padding silently drop every read
+    # (or crash in positional_array), so check the window up front.
+    windows = {t: l - five_offset - three_offset for t, l in bwa_ref_lens.items()}
+    too_short = {t: w for t, w in windows.items() if w < min_coverage}
+    if too_short:
+        worst = min(too_short.items(), key=lambda kv: kv[1])
+        raise ValueError(
+            f"--five_offset {five_offset} / --three_offset {three_offset} leave "
+            f"{len(too_short)} of {len(windows)} BWA references with a scoring window "
+            f"shorter than min_coverage ({min_coverage}); no read can pass. "
+            f"Smallest: {worst[0]} = {worst[1]} bases "
+            f"(length {bwa_ref_lens[worst[0]]}). Set the offsets to the 5'/3' padding "
+            f"of {os.path.basename(bwa_ref_path)} (0/0 if it is unpadded)."
+        )
+    print(f"  BWA scoring window: {min(windows.values())}-{max(windows.values())} bases "
+          f"(offsets {five_offset}/{three_offset})")
+
     # Load BWA alignments
     print("\n" + "="*70)
     print("LOADING BWA ALIGNMENTS")
@@ -232,8 +255,8 @@ def generate_aligner_comparison_figures(
         bam_path=bwa_bam,
         ref_dict=bwa_ref_dict,
         ref_lens=bwa_ref_lens,
-        five_offset=36,
-        three_offset=42,
+        five_offset=five_offset,
+        three_offset=three_offset,
         model=model,
         threads=threads,
         ident_threshold=ident_threshold,
