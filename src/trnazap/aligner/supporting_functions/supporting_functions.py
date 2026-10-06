@@ -31,6 +31,7 @@ def get_model_to_ref():
     return {
         "yeast": ref_path / "zap_align_references" / "sacCer3-mature-tRNAs_zap_ref.fa",
         "e_coli": ref_path / "zap_align_references" / "eschColi_K_12_MG1655-mature-tRNAs_zap_ref.fa",
+        "human": ref_path / "zap_align_references" / "hg38-mature-tRNAs_mature.fa"
     }
 
 
