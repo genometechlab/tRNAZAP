@@ -20,6 +20,7 @@ from ..feeders import SequenceStandardizer, collate_fn
 from ..storages import InferenceResults, InferenceMetadata, ReadResultDetailed, ReadResult
 from ..utils import PathSet
 from ..io import ZIRWriter, ZIRShardManager
+from ..io.archive_writer import new_run_id, run_id_of_tmp_dir
 
 
 logger = logging.getLogger(__name__)
@@ -125,7 +126,9 @@ class Inference(InferenceBase):
         
         num_reads = self._get_num_reads(read_ids, pod5_pathset)
 
-        metadata = self._build_metadata(pod5_pathset, batch_size)
+        # One id per run: an infer-multi worker's chunks share the staging dir's.
+        run_id = run_id_of_tmp_dir(staging_dir) if staging_dir else new_run_id()
+        metadata = self._build_metadata(pod5_pathset, batch_size, run_id=run_id)
         
         # Setup storage strategy
         in_memory_results = None
@@ -191,6 +194,8 @@ class Inference(InferenceBase):
             # Shards only get their final .zir names if the whole run succeeded;
             # otherwise they stay readable as .zir.partial.
             if zir_manager:
+                # Final header values; the manager also sets num_reads_processed.
+                metadata.total_inference_time = time.time() - start
                 if succeeded and not errors:
                     zir_manager.close()
                 else:

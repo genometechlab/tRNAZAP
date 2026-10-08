@@ -159,11 +159,15 @@ class ReadResultDetailed:
     # ------------------------------------------------------------------------
 
     @cached_property
-    def variable_region_range(self) -> Tuple[int, int]:
-        """Return (start, end) indices for predicted variable region."""
+    def variable_region_range(self) -> Optional[Tuple[int, int]]:
+        """(start, end) of the predicted variable region.
+
+        (-1, -1) if no token was predicted as variable region; None if the model
+        has no segmentation output.
+        """
         preds = self.segmentation_preds
         if preds is None:
-            return (-1, -1)
+            return None
         return self._locate_region_of_interest(preds, 0)
 
     def get_smoothed_segmentation_preds(
@@ -215,7 +219,8 @@ class ReadResultDetailed:
         Convert this ReadResultDetailed into a lightweight ReadResult.
 
         Keeps the top-3 classification classes, the variable-region range derived
-        from the raw (argmax) segmentation, and a boolean fragmentation flag.
+        from the raw (argmax) segmentation, and a boolean fragmentation flag. Outputs
+        the model doesn't predict are None (top-3 is empty without classification).
 
         Returns:
             ReadResult
@@ -226,17 +231,14 @@ class ReadResultDetailed:
         else:
             top3 = np.empty((0,), dtype=int)
 
-        # --- variable region from raw (argmax) segmentation ---
-        if self.segmentation_logits is not None:
-            variable_region = self.variable_region_range
-        else:
-            variable_region = (-1, -1)
+        # --- variable region from raw (argmax) segmentation; None if not predicted ---
+        variable_region = self.variable_region_range
 
-        # --- fragmentation -> boolean flag ---
+        # --- fragmentation -> boolean flag; None if not predicted ---
         if self.fragmentation_pred is not None:
             fragmented = bool(int(self.fragmentation_pred) > 0)
         else:
-            fragmented = False
+            fragmented = None
 
         return ReadResult(
             read_id=self.read_id,
@@ -267,9 +269,9 @@ class ReadResult:
     """Results for a single read (lightweight / compressed)."""
 
     read_id: str
-    top3_classes: np.ndarray
-    variable_region_range: Tuple[int, int]
-    fragmented: bool
+    top3_classes: np.ndarray                          # empty if no classification output
+    variable_region_range: Optional[Tuple[int, int]]  # None if no segmentation output
+    fragmented: Optional[bool]                        # None if no fragmentation output
     num_chunks: int
     chunk_size: int
     cropped: bool
@@ -317,7 +319,7 @@ class ReadResultLike(Protocol):
     cropped: bool
 
     @property
-    def variable_region_range(self) -> Tuple[int, int]: ...
+    def variable_region_range(self) -> Optional[Tuple[int, int]]: ...
 
     @property
     def classification_pred(self) -> Optional[int]: ...

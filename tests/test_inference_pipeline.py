@@ -120,3 +120,83 @@ def test_predict_iter_raises_consumer_error(inferer, read_ids, monkeypatch):
     with pytest.raises(RuntimeError, match="simulated model failure"):
         list(inferer.predict_iter(POD5, read_ids=read_ids, batch_size=4))
     assert not _pipeline_threads()
+
+
+def test_archive_header_records_run_provenance(tmp_path, inferer, read_ids):
+    out = tmp_path / "shards"
+    inferer.predict(POD5, output_path=out, read_ids=read_ids, batch_size=8,
+                    shard_size=15, show_progress=False, return_results=False)
+    shards = sorted(out.glob("*.zir"))
+    assert len(shards) == 3
+    metas = []
+    for p in shards:
+        with ZIRReader(p) as reader:
+            metas.append(reader.metadata)
+    # Written at close: run totals, identical in every shard of the run
+    assert {m.num_reads_processed for m in metas} == {len(read_ids)}
+    assert all(m.total_inference_time and m.total_inference_time > 0 for m in metas)
+    assert len({m.run_id for m in metas}) == 1 and metas[0].run_id
+    m = metas[0]
+    assert m.tasks == ["classification", "fragmentation", "segmentation"]
+    assert m.head_type == "mlp"
+    assert m.trnazap_version
+    assert m.checkpoint_sha256 is None  # no checkpoint
+    assert m.config_name is None        # built from a dict, not a file
+
+
+def test_staging_dir_run_id_is_shared(tmp_path, inferer, read_ids):
+    from trnazap.io.archive_writer import finalize_tmp_dir, make_tmp_dir, run_id_of_tmp_dir
+
+    run_tmp = make_tmp_dir(tmp_path)
+    for i, chunk in enumerate((read_ids[:20], read_ids[20:])):
+        inferer.predict(POD5, output_path=tmp_path / f"results_{i:05d}.zir", read_ids=chunk,
+                        batch_size=8, show_progress=False, return_results=False,
+                        staging_dir=run_tmp)
+    finalize_tmp_dir(run_tmp, tmp_path)
+    for p in sorted(tmp_path.glob("results_*.zir")):
+        with ZIRReader(p) as reader:
+            assert reader.metadata.run_id == run_id_of_tmp_dir(run_tmp)
+            assert reader.metadata.num_reads_processed == 20  # reads of that chunk
+
+
+def test_model_without_fragmentation_stores_none(tmp_path, read_ids):
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        inf = Inference(dict(TINY_CONFIG, tasks=["classification", "segmentation"]), device="cpu")
+    out = tmp_path / "run.zir"
+    inf.predict(POD5, output_path=out, read_ids=read_ids[:8], batch_size=8,
+                show_progress=False, return_results=False)
+    with ZIRReader(out) as reader:
+        assert reader.metadata.tasks == ["classification", "segmentation"]
+        reads = list(reader)
+    assert all(r.fragmented is None for r in reads)
+    assert all(r.variable_region_range is not None for r in reads)
+
+
+def test_config_name_and_checkpoint_hash_recorded():
+    import hashlib
+
+    cfg = Path(__file__).resolve().parents[1] / "configs" / "zap_s54_c51_BIOecoli_fragmented.yaml"
+    if not cfg.exists():
+        pytest.skip("config not available")
+    try:
+        inf = Inference(str(cfg), device="cpu")
+    except FileNotFoundError:
+        pytest.skip("checkpoint not available")
+    md = inf._build_metadata(inf._resolve_paths(POD5), batch_size=8)
+    assert md.config_name == cfg.name
+    ckpt = Path(inf.model_loader.checkpoint_path)
+    assert md.checkpoint_sha256 == hashlib.sha256(ckpt.read_bytes()).hexdigest()
+    assert "model_checkpoint" not in md.__dict__  # no machine-specific path
+
+
+def test_named_config_records_its_yaml_name():
+    from trnazap.config.model_config import config_file
+
+    name = "zap_s54_c51_BIOecoli_fragmented"
+    try:
+        path = config_file(name)  # uses the cached configs/<name>.yaml
+    except ValueError:
+        pytest.skip("named config not cached locally")
+    assert path.name == f"{name}.yaml"
+    assert config_file(str(path)).name == path.name  # same name when given the path

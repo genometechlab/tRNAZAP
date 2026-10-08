@@ -5,7 +5,13 @@ MAGIC_BYTES = b'ZIR\x00'
 # Version is stored as a uint32, encoded as major*100 + minor.
 # v1 (legacy) wrote the literal value 1. v101 == "1.01" adds the per-record
 # `cropped` flag; v1 files remain readable (cropped defaults to False).
-FORMAT_VERSION = 101
+# v102 == "1.02": same binary layout; the header metadata gains provenance fields
+# (config_name, tasks, head_type, checkpoint_sha256, run_id, trnazap_version),
+# drops model_type and model_checkpoint (a machine-specific path),
+# and is rewritten at close; summary records may store null for outputs the model
+# doesn't predict (fragmented, variable_region_range).
+FORMAT_VERSION = 102
+SUPPORTED_VERSIONS = (1, 101, 102)
 HEADER_SIZE = 65536
 
 # Compression

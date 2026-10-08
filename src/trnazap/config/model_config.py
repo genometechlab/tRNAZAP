@@ -230,14 +230,12 @@ class ModelConfig:
         if isinstance(cfg, cls):
             return cfg
         if isinstance(cfg, str):
-            if cfg in AVAILABLE_CONFIGS:
-                cfg = resolve_named_config(name=cfg)
-            cfg_path = Path(cfg)
+            cfg_path = config_file(cfg)
             suffix = cfg_path.suffix.lower()
             if suffix in {".yaml", ".yml"}:
-                return cls.from_yaml(cfg)
+                return cls.from_yaml(cfg_path)
             elif suffix == ".json":
-                return cls.from_json(cfg)
+                return cls.from_json(cfg_path)
             raise ValueError(f"Unsupported config file type: {suffix}")
         if isinstance(cfg, dict):
             return cls.from_dict(cfg)
@@ -259,12 +257,22 @@ class ModelConfig:
 
 # ---------------------------------------------------------------------------
 
+def config_file(cfg: str) -> Path:
+    """The file a config string refers to: a known config name or a path."""
+    if cfg in AVAILABLE_CONFIGS:
+        return Path(resolve_named_config(name=cfg))
+    return Path(cfg)
+
+
+# ---------------------------------------------------------------------------
+
 class ModelLoader:
 
     def __init__(self, config: ModelConfig, device: Optional[torch.device] = None):
         self.config = config
         self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model = None
+        self.checkpoint_path: Optional[str] = None  # set by load_checkpoint()
 
     def build_model(self) -> ModelProtocol:
         module = importlib.import_module("trnazap.model")
@@ -320,6 +328,7 @@ class ModelLoader:
             warnings.warn("No checkpoint path provided", stacklevel=2)
         else:
             load_weights(self.model, checkpoint_path)
+        self.checkpoint_path = checkpoint_path  # what was actually loaded
 
     def get_model(self, load_checkpoint: bool = True) -> ModelProtocol:
         if self.model is None:

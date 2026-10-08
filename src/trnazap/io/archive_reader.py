@@ -12,13 +12,22 @@ import logging
 from functools import partial
 from concurrent.futures import ThreadPoolExecutor
 
-from .archive_format import MAGIC_BYTES, FORMAT_VERSION, HEADER_SIZE, RECORD_MARKER, PREVIEW_MAX
+from .archive_format import MAGIC_BYTES, FORMAT_VERSION, HEADER_SIZE, RECORD_MARKER, PREVIEW_MAX, SUPPORTED_VERSIONS
 from ..utils import search_path
 
 if TYPE_CHECKING:
     from ..storages import InferenceMetadata, InferenceResults, ReadResultDetailed, ReadResult, ReadResultLike
 
 logger = logging.getLogger(__name__)
+
+
+# Summary fields are null (format >= 102) when the model doesn't predict that output.
+def _optional_bool(v):
+    return None if v is None else bool(v)
+
+
+def _optional_tuple(v):
+    return None if v is None else tuple(v)
 PathLike = Union[str, Path, os.PathLike]
 
 
@@ -322,7 +331,7 @@ class ZIRReader:
     @property
     def metadata(self) -> "InferenceMetadata":
         from ..storages import InferenceMetadata  # type: ignore
-        return InferenceMetadata(**self.metadata_dict.copy())
+        return InferenceMetadata.from_dict(self.metadata_dict)
 
     def to_inference_results(self) -> "InferenceResults":
         from ..storages import InferenceResults, InferenceMetadata  # type: ignore
@@ -330,7 +339,7 @@ class ZIRReader:
         # pod5_paths stays a list to match InferenceMetadata.pod5_paths (Optional[List[str]])
         # and the writer's header serialization. Do NOT convert back to a set here, or
         # the round-trip type would disagree with the dataclass and with reader.metadata.
-        md = InferenceMetadata(**meta)
+        md = InferenceMetadata.from_dict(meta)
         res = InferenceResults(metadata=md)
         for r in self.reads():
             res.add_result(r)
@@ -455,8 +464,8 @@ class ZIRReader:
             return ReadResult(
                 read_id=rid,
                 top3_classes=top3_np,
-                variable_region_range=tuple(summary.get("variable_region_range", (-1, -1))),
-                fragmented=bool(summary.get("fragmented", False)),
+                variable_region_range=_optional_tuple(summary.get("variable_region_range", (-1, -1))),
+                fragmented=_optional_bool(summary.get("fragmented", False)),
                 num_chunks=num_chunks,
                 chunk_size=chunk_size,
                 cropped=bool(summary.get("cropped", False)),
@@ -474,9 +483,13 @@ class ZIRReader:
         if len(ver_b) < 4:
             raise EOFError("Unexpected EOF while reading format version")
         version = struct.unpack("<I", ver_b)[0]
-        # Accept legacy v1 and current v101 ("1.01"); reject anything newer/unknown.
-        if version not in (1, FORMAT_VERSION):
-            raise ValueError(f"Unsupported format version {version}")
+        if version not in SUPPORTED_VERSIONS:
+            if version > FORMAT_VERSION:
+                raise ValueError(
+                    f"ZIR format version {version} was written by a newer trnazap "
+                    f"(this one reads up to {FORMAT_VERSION}); please upgrade trnazap"
+                )
+            raise ValueError(f"Unsupported ZIR format version {version}")
 
         rc_b = f.read(4)
         if len(rc_b) < 4:
@@ -506,7 +519,7 @@ class ZIRReader:
 
     def _check_metadata_compatibility(self, metas: List[Dict[str, Any]]) -> None:
         ref = metas[0]
-        must_match = ["model_name", "model_type", "chunk_size"]
+        must_match = ["model_name", "chunk_size"]
         for i, m in enumerate(metas[1:], 1):
             for field in must_match:
                 if ref.get(field) != m.get(field):
