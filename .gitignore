@@ -51,7 +51,7 @@ Thumbs.db
 *.svg
 
 # Experimental folders
-**test**
+**test_data**
 **inference_runs**
 **paper_plots**
 
