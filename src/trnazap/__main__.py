@@ -3,6 +3,7 @@
 import argparse
 import sys
 from importlib.metadata import version as _pkg_version
+from trnazap.cli.logging_setup import setup_logging
 from trnazap.cli import align_cli, infer_cli, infer_multi_cli, label_cli, visualize_alignment_cli, visualize_inference_cli, compare_conditions_cli
 
 
@@ -41,6 +42,7 @@ def main():
     
     # Parse arguments
     args = parser.parse_args()
+    setup_logging()
     
     # Execute the appropriate subcommand
     return args.func(args)
