@@ -1,3 +1,4 @@
+import logging
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
@@ -23,6 +24,8 @@ AVAILABLE_CONFIGS = {
 
 # default_configs.py lives at <root>/src/trnazap/config/default_configs.py
 # parents[3] = project root
+logger = logging.getLogger(__name__)
+
 _PACKAGE_ROOT    = Path(__file__).resolve().parents[3]
 _CONFIGS_DIR     = _PACKAGE_ROOT / "configs"
 _CHECKPOINTS_DIR = _PACKAGE_ROOT / "checkpoints"
@@ -34,7 +37,7 @@ def _download(url: str, dest: Path, label: str) -> None:
             f"This named config is not yet available for download."
         )
     dest.parent.mkdir(parents=True, exist_ok=True)
-    print(f"Downloading {label} -> {dest}")
+    logger.info("Downloading %s -> %s", label, dest)
     
     urllib.request.urlretrieve(url, dest)
 
@@ -61,11 +64,11 @@ def resolve_named_config(name: str) -> Tuple[Path, Path]:
     if not yaml_path.exists():
         _download(urls.yaml_url, yaml_path, label=f"{name} config")
     else:
-        print(f"Using cached config: {yaml_path}")
+        logger.info("Using cached config: %s", yaml_path)
 
     if not weights_path.exists():
         _download(urls.weights_url, weights_path, label=f"{name} weights")
     else:
-        print(f"Using cached weights: {weights_path}")
+        logger.info("Using cached weights: %s", weights_path)
 
     return yaml_path
