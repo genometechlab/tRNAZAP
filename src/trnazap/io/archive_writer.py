@@ -6,9 +6,10 @@ import io
 import numpy as np
 import zstandard as zstd
 from pathlib import Path
-from typing import Optional, TYPE_CHECKING, Union
+from typing import List, Optional, TYPE_CHECKING, Union
 from dataclasses import asdict
 import logging
+import time
 import uuid
 
 from .archive_format import (
@@ -20,6 +21,49 @@ if TYPE_CHECKING:
     from ..storages import InferenceMetadata, ReadResultLike, InferenceStore
 
 logger = logging.getLogger(__name__)
+
+PARTIAL_SUFFIX = ".partial"
+TMP_DIR_PREFIX = ".tmp_"
+
+
+def make_tmp_dir(output_dir: Path) -> Path:
+    """Create a fresh ``<output_dir>/.tmp_<timestamp>_<id>/`` for one run."""
+    tmp_dir = Path(output_dir) / (
+        f"{TMP_DIR_PREFIX}{time.strftime('%Y%m%d-%H%M%S')}_{uuid.uuid4().hex[:6]}"
+    )
+    tmp_dir.mkdir()
+    return tmp_dir
+
+
+def finalize_tmp_dir(tmp_dir: Path, output_dir: Path) -> List[Path]:
+    """Move every ``<name>.zir.partial`` in ``tmp_dir`` to ``output_dir/<name>.zir``.
+
+    Then remove ``tmp_dir`` with rmdir (not rmtree), so anything unexpected left in
+    it raises instead of being deleted. Returns the final paths.
+    """
+    finals = []
+    for partial in sorted(Path(tmp_dir).glob(f"*.zir{PARTIAL_SUFFIX}")):
+        final = Path(output_dir) / partial.name[: -len(PARTIAL_SUFFIX)]
+        os.replace(partial, final)
+        finals.append(final)
+    Path(tmp_dir).rmdir()
+    return finals
+
+
+def warn_existing_outputs(output_dir: Path, existing: List[Path]) -> None:
+    """Warn (never block) about archives a run will overwrite and leftover temp dirs."""
+    if existing:
+        logger.warning(
+            "Output already contains %d archive(s) matching this run's names (e.g. %s); "
+            "they will be overwritten, and any not rewritten will mix with this run's results",
+            len(existing), existing[0],
+        )
+    stale = sorted(Path(output_dir).glob(f"{TMP_DIR_PREFIX}*"))
+    if stale:
+        logger.warning(
+            "Output contains %d temp dir(s) left by unfinished runs (e.g. %s)",
+            len(stale), stale[0],
+        )
 
 
 class ZIRWriter:
@@ -301,13 +345,35 @@ class ZIRWriter:
 
 
 class ZIRShardManager:
-    """Manages writing to ZIR files with optional sharding and comprehensive path handling."""
+    """Manages writing to ZIR files with optional sharding and comprehensive path handling.
+
+    Each run writes its shards as ``<name>.zir.partial`` inside its own hidden
+    directory, ``<output_dir>/.tmp_<timestamp>_<id>/``. Only :meth:`close`, once every
+    shard is finished, moves them into the output directory under their final
+    ``.zir`` names and removes the temp directory. So the output directory only ever
+    holds complete runs, and concurrent runs never write into each other's files.
+
+    :meth:`abort` closes the shards cleanly and leaves the temp directory in place,
+    so the reads written so far can be inspected (``ZIRReader`` opens an explicitly
+    named ``.zir.partial``; directory scans skip them).
+
+    Existing files with the same final names are overwritten on close; that is the
+    caller's responsibility (a warning is logged when they exist).
+
+    With ``staging_dir``, the shards go into that existing temp dir instead, and
+    whoever created it finalizes it (see :func:`finalize_tmp_dir`): ``close()`` and
+    ``abort()`` then only close the files, and no startup warnings are logged. This
+    lets several managers (e.g. one per GPU worker) make up one run.
+
+    Use as a context manager to get close() on success and abort() on error.
+    """
     
     def __init__(
         self,
         base_path: Union[str, Path],
         metadata: 'InferenceMetadata',
         shard_size: Optional[int] = None,
+        staging_dir: Optional[Union[str, Path]] = None,
     ):
         """
         Initialize shard manager with extensive path management.
@@ -321,6 +387,8 @@ class ZIRShardManager:
                     - Path with extension: Extension ignored, user warned
             metadata: Inference metadata
             shard_size: Records per shard (None for single file)
+            staging_dir: Existing temp dir owned by the caller (see class docstring);
+                None = create and finalize one per manager
             
         Raises:
             ValueError: If path handling fails
@@ -331,13 +399,22 @@ class ZIRShardManager:
         self.current_writer: Optional[ZIRWriter] = None
         self.current_count = 0
         self.total_reads = 0
-        
+        self.shard_paths: list = []   # final .zir paths, in shard order
+
         # Process and validate base path
         self._process_base_path(base_path)
         
         # Create necessary directories
         self._ensure_directories()
-        
+        self.owns_tmp_dir = staging_dir is None
+        if self.owns_tmp_dir:
+            self._warn_existing_outputs()
+            self.tmp_dir = make_tmp_dir(self.output_dir)
+        else:
+            self.tmp_dir = Path(staging_dir)
+            if not self.tmp_dir.is_dir():
+                raise FileNotFoundError(f"Staging dir does not exist: {self.tmp_dir}")
+
         # Open first shard/file
         self._open_new_shard()
     
@@ -408,14 +485,25 @@ class ZIRShardManager:
             filename = self.shard_pattern.format(self.current_shard)
             return self.output_dir / filename
     
+    def _warn_existing_outputs(self) -> None:
+        if self.shard_size is None:
+            existing = [self.base_path] if self.base_path.exists() else []
+        else:
+            existing = sorted(self.output_dir.glob(
+                self.shard_pattern.replace("{:04d}", "[0-9][0-9][0-9][0-9]")))
+        warn_existing_outputs(self.output_dir, existing)
+
+    def _partial(self, path: Path) -> Path:
+        return self.tmp_dir / (path.name + PARTIAL_SUFFIX)
+
     def _open_new_shard(self) -> None:
-        """Open a new shard file."""
+        """Open a new shard file (under its .partial name)."""
         shard_path = self._get_shard_path()
-        self.current_writer = ZIRWriter(shard_path, self.metadata)
+        self.shard_paths.append(shard_path)
+        self.current_writer = ZIRWriter(self._partial(shard_path), self.metadata)
         self.current_writer.__enter__()
         self.current_count = 0
-        
-    
+
     def _close_current_shard(self) -> None:
         """Close current shard."""
         if self.current_writer:
@@ -425,8 +513,28 @@ class ZIRShardManager:
             self.current_shard += 1
     
     def close(self) -> None:
-        """Close any open shard and finalize."""
+        """Close the open shard; if this manager owns the temp dir, finalize it."""
         self._close_current_shard()
+        if self.owns_tmp_dir and self.tmp_dir.exists():
+            finalize_tmp_dir(self.tmp_dir, self.output_dir)
+
+    def abort(self) -> None:
+        """Close the open shard and leave all shards in the temp dir as .partial."""
+        self._close_current_shard()
+        if self.owns_tmp_dir and self.tmp_dir.exists():
+            logger.warning(
+                "Run did not finish; %d incomplete shard(s) with %d read(s) left in %s",
+                len(self.shard_paths), self.total_reads, self.tmp_dir,
+            )
+
+    def __enter__(self) -> "ZIRShardManager":
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        if exc_type is None:
+            self.close()
+        else:
+            self.abort()
 
 
 # ---------------- Backend-agnostic writer ---------------- #
@@ -448,18 +556,9 @@ def write_zir(
         shard_size: Records per shard, or None for a single file.
 
     Returns:
-        The single-file path (single mode) or the parent directory (sharded mode).
+        The single-file path (single mode) or the output directory (sharded mode).
     """
-    if shard_size is None:
-        with ZIRWriter(path, store.metadata) as writer:
-            for read in store:
-                writer.add_result(read)
-        return Path(path)
-
-    manager = ZIRShardManager(path, store.metadata, shard_size)
-    try:
+    with ZIRShardManager(path, store.metadata, shard_size) as manager:
         for read in store:
             manager.add_result(read)
-    finally:
-        manager.close()
-    return Path(path).parent
+    return manager.base_path if shard_size is None else manager.output_dir

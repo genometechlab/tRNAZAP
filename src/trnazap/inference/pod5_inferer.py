@@ -27,6 +27,37 @@ logger = logging.getLogger(__name__)
 PathLike = Union[str, Path]
 PathLikeList = Union[PathLike, List[PathLike]]
 
+_POLL_S = 0.1
+_STOPPED = object()  # returned by _get once the pipeline has been stopped
+
+
+def _put(q: queue.Queue, item, stop: threading.Event) -> bool:
+    """Blocking put that gives up (returns False) once ``stop`` is set."""
+    while not stop.is_set():
+        try:
+            q.put(item, timeout=_POLL_S)
+            return True
+        except queue.Full:
+            continue
+    return False
+
+
+def _get(q: queue.Queue, stop: threading.Event):
+    """Blocking get that returns ``_STOPPED`` once ``stop`` is set."""
+    while not stop.is_set():
+        try:
+            return q.get(timeout=_POLL_S)
+        except queue.Empty:
+            continue
+    return _STOPPED
+
+
+def _raise_worker_error(errors: List[BaseException], processed: Optional[int] = None) -> None:
+    if errors:
+        done = "" if processed is None else f" after {processed} read(s)"
+        raise RuntimeError(f"Inference worker failed{done}: {errors[0]!r}") from errors[0]
+
+
 class Inference(InferenceBase):
     """
     Stream reads from POD5, preprocess on CPU, batch on-the-fly,
@@ -51,6 +82,7 @@ class Inference(InferenceBase):
         shard_size: Optional[int] = None,
         show_progress: bool = True,
         return_results: bool = True,
+        staging_dir: Optional[Union[str, Path]] = None,
     ) -> Optional[InferenceResults]:
         """
         Run inference on POD5 files.
@@ -65,6 +97,9 @@ class Inference(InferenceBase):
         show_progress : Show progress bars
         return_results: If True, return InferenceResults object (keeps all in memory)
                        If False, only write to disk (memory efficient for large datasets)
+        staging_dir   : Existing .tmp_ dir to write the .zir.partial shards into; the
+                        caller then finalizes it (see ZIRShardManager). None = this
+                        call creates and finalizes its own
         
         Returns
         -------
@@ -104,35 +139,13 @@ class Inference(InferenceBase):
                 base_path=Path(output_path),
                 metadata=metadata,
                 shard_size=shard_size,
+                staging_dir=staging_dir,
             )
-            
-        
+
         producer_pbar = None
         consumer_pbar = None
         if show_progress:
-            bar_fmt = (
-                "{desc:<20} "
-                "{percentage:6.2f}%|"
-                "{bar:30}| "
-                "{n_fmt}/{total_fmt} "
-                "[{elapsed}/{remaining}, {rate_fmt}]"
-            )
-            producer_pbar = tqdm(
-                desc="Reading POD5",
-                unit="reads",
-                total=num_reads,
-                leave=True,
-                bar_format=bar_fmt,
-                position=0
-            )
-            consumer_pbar = tqdm(
-                desc="Processed reads",
-                unit="reads",
-                total=num_reads,
-                leave=True,
-                bar_format=bar_fmt,
-                position=1
-            )
+            producer_pbar, consumer_pbar = self._make_progress_bars(num_reads)
 
         # Queue for preprocessed samples
         sample_queue: "queue.Queue[Optional[Dict]]" = queue.Queue(
@@ -140,6 +153,8 @@ class Inference(InferenceBase):
         )
         
         stats = {"failed": 0}
+        stop = threading.Event()
+        errors: List[BaseException] = []
 
         # Producer thread
         producer = threading.Thread(
@@ -150,32 +165,48 @@ class Inference(InferenceBase):
                 sample_queue=sample_queue,
                 progress_bar=producer_pbar,
                 stats=stats,
+                stop=stop,
+                errors=errors,
             ),
             daemon=True,
             name="pod5-producer",
         )
         producer.start()
 
-        # Consumer loop
-        processed_count = self._consumer_loop(
-            sample_queue=sample_queue,
-            in_memory_results=in_memory_results,
-            zir_manager=zir_manager,
-            batch_size=batch_size,
-            progress_bar=consumer_pbar
-        )
-
-        producer.join()
+        processed_count = 0
+        succeeded = False
+        try:
+            processed_count = self._consumer_loop(
+                sample_queue=sample_queue,
+                in_memory_results=in_memory_results,
+                zir_manager=zir_manager,
+                batch_size=batch_size,
+                progress_bar=consumer_pbar
+            )
+            succeeded = True
+        finally:
+            # On failure this unblocks the producer; on success it has already exited.
+            stop.set()
+            producer.join()
+            # Shards only get their final .zir names if the whole run succeeded;
+            # otherwise they stay readable as .zir.partial.
+            if zir_manager:
+                if succeeded and not errors:
+                    zir_manager.close()
+                else:
+                    zir_manager.abort()
+            for pbar in (producer_pbar, consumer_pbar):
+                if pbar:
+                    pbar.close()
 
         if stats["failed"]:
-            logger.info("Failed to process %d read(s)", stats["failed"])
-        
+            logger.warning("Failed to process %d read(s)", stats["failed"])
+
+        _raise_worker_error(errors, processed_count)
+
         # Finalize
         total_time = time.time() - start
-        
-        if zir_manager:
-            zir_manager.close()
-            
+
         if in_memory_results:
             in_memory_results.metadata.total_inference_time = total_time
             
@@ -186,6 +217,23 @@ class Inference(InferenceBase):
         )
         
         return in_memory_results
+
+    @staticmethod
+    def _make_progress_bars(num_reads: Optional[int]):
+        """Return the (reading, processed) progress bars; anything with update()/close() works."""
+        bar_fmt = (
+            "{desc:<20} "
+            "{percentage:6.2f}%|"
+            "{bar:30}| "
+            "{n_fmt}/{total_fmt} "
+            "[{elapsed}/{remaining}, {rate_fmt}]"
+        )
+        return (
+            tqdm(desc="Reading POD5", unit="reads", total=num_reads,
+                 leave=True, bar_format=bar_fmt, position=0),
+            tqdm(desc="Processed reads", unit="reads", total=num_reads,
+                 leave=True, bar_format=bar_fmt, position=1),
+        )
 
     def predict_iter(
         self,
@@ -219,7 +267,9 @@ class Inference(InferenceBase):
         )
 
         stats = {"failed": 0}
-        
+        stop = threading.Event()
+        errors: List[BaseException] = []
+
         # Producer thread
         producer = threading.Thread(
             target=self._producer_worker,
@@ -229,8 +279,11 @@ class Inference(InferenceBase):
                 sample_queue=sample_queue,
                 progress_bar=None,
                 stats=stats,
+                stop=stop,
+                errors=errors,
             ),
             daemon=True,
+            name="pod5-producer",
         )
         producer.start()
 
@@ -241,24 +294,31 @@ class Inference(InferenceBase):
                 sample_queue=sample_queue,
                 result_queue=result_queue,
                 batch_size=batch_size,
+                stop=stop,
+                errors=errors,
             ),
             daemon=True,
+            name="gpu-consumer",
         )
         consumer.start()
 
-        # Yield results as they come
-        while True:
-            result = result_queue.get()
-            if result is None:
-                break
-            yield result
-
-        producer.join()
+        # Yield results as they come. The finally block also runs when the caller
+        # stops iterating early, so both threads are always shut down.
+        try:
+            while True:
+                result = result_queue.get()
+                if result is None:
+                    break
+                yield result
+        finally:
+            stop.set()
+            producer.join()
+            consumer.join()
 
         if stats["failed"]:
-            logger.info("Failed to process %d read(s)", stats["failed"])
-            
-        consumer.join()
+            logger.warning("Failed to process %d read(s)", stats["failed"])
+
+        _raise_worker_error(errors)
 
     def _producer_worker(
         self,
@@ -267,9 +327,15 @@ class Inference(InferenceBase):
         sample_queue: "queue.Queue[Optional[Dict]]",
         read_ids: Optional[List[str]],
         progress_bar: Optional[tqdm.tqdm],
-        stats: Optional[Dict[str, int]]
+        stats: Optional[Dict[str, int]],
+        stop: threading.Event,
+        errors: List[BaseException],
     ) -> None:
-        """CPU thread: stream reads → standardise → chunk → queue."""
+        """CPU thread: stream reads → standardise → chunk → queue.
+
+        Per-read failures are counted in ``stats``; anything else (e.g. unreadable
+        POD5, bad read id) is recorded in ``errors`` for the caller to raise.
+        """
         try:
             with pod5.DatasetReader(
                 pod5_paths, recursive=True, max_cached_readers=4, threads=4
@@ -281,6 +347,8 @@ class Inference(InferenceBase):
                 )
 
                 for rec in reads_iter:
+                    if stop.is_set():
+                        return
                     sample = None
                     try:
                         sample = self._process_record(rec)
@@ -291,11 +359,13 @@ class Inference(InferenceBase):
                         if progress_bar:
                             progress_bar.update(1)
                             
-                    if sample is not None:
-                        sample_queue.put(sample, block=True)
-                        
+                    if sample is not None and not _put(sample_queue, sample, stop):
+                        return
+
+        except Exception as exc:
+            errors.append(exc)
         finally:
-            sample_queue.put(None)
+            _put(sample_queue, None, stop)
             if progress_bar:
                 progress_bar.close()
 
@@ -346,26 +416,31 @@ class Inference(InferenceBase):
         sample_queue: "queue.Queue[Optional[Dict]]",
         result_queue: "queue.Queue[Optional[ReadResultDetailed]]",
         batch_size: int,
+        stop: threading.Event,
+        errors: List[BaseException],
     ) -> None:
         """GPU thread for iterator: process batches and queue results."""
         current_batch: List[Dict] = []
-        finished = False
+        try:
+            while True:
+                sample = _get(sample_queue, stop)
+                if sample is _STOPPED:
+                    return
+                if sample is not None:
+                    current_batch.append(sample)
 
-        while not finished:
-            sample = sample_queue.get()
-            if sample is None:
-                finished = True
-            else:
-                current_batch.append(sample)
-
-            if finished or len(current_batch) == batch_size:
-                if current_batch:
-                    batch_results = self._run_gpu_batch(current_batch)
-                    for result in batch_results:
-                        result_queue.put(result)
+                if current_batch and (sample is None or len(current_batch) == batch_size):
+                    for result in self._run_gpu_batch(current_batch):
+                        if not _put(result_queue, result, stop):
+                            return
                     current_batch = []
-        
-        result_queue.put(None)  # Sentinel
+
+                if sample is None:
+                    return
+        except Exception as exc:
+            errors.append(exc)
+        finally:
+            _put(result_queue, None, stop)  # Sentinel
 
     def _run_gpu_batch(self, batch: List[Dict]) -> List[ReadResultDetailed]:
         """Collate, push to GPU, run model, return results."""
