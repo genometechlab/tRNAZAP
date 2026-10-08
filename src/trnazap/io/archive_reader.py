@@ -94,6 +94,10 @@ class ZIRReader:
                 p_list.extend(Path(x) for x in found)
             elif p.is_file() and p.suffix == ".zir":
                 p_list.append(p)
+            elif p.is_file() and p.name.endswith(".zir.partial"):
+                # Only when named explicitly: directory scans and globs skip these.
+                logger.warning("Reading incomplete archive %s (its run did not finish)", p_str)
+                p_list.append(p)
             else:
                 logger.warning("Path %r is neither a .zir file nor a directory; skipped", p_str)
 
@@ -160,52 +164,65 @@ class ZIRReader:
     def reads(self, selection: Optional[Set[str]] = None) -> Generator[ReadResultLike, None, None]:
         """Iterate reads; if *selection* provided, use fast path to avoid full decompress.
 
+        Each call opens its own file handles, so get()/get_read() or a nested
+        iteration inside the loop cannot move this iterator's file position.
+
         Args:
             selection: Optional set of read IDs to include.
         """
         if selection is not None and not isinstance(selection, set):
             selection = set(selection)
 
-        for file_idx, (f, rc) in enumerate(zip(self._files, self.record_counts)):
-            f.seek(HEADER_SIZE)
-            for _ in range(rc):
-                pos = f.tell()
-                header = f.read(len(RECORD_MARKER) + 8)
-                if len(header) < len(RECORD_MARKER) + 8:
-                    raise EOFError("Unexpected EOF while reading record header")
-                if header[: len(RECORD_MARKER)] != RECORD_MARKER:
-                    got = header[: len(RECORD_MARKER)].hex()
-                    raise EOFError(f"Invalid record marker at {pos} (got 0x{got})")
+        for file_idx, (path, rc) in enumerate(zip(self._paths, self.record_counts)):
+            with open(path, "rb", buffering=1 << 20) as f:
+                yield from self._iter_file(f, file_idx, rc, selection)
 
-                csize, usize = struct.unpack_from('<II', header, len(RECORD_MARKER))
-                compressed = f.read(csize)
-                if len(compressed) < csize:
-                    raise EOFError("Unexpected EOF while reading compressed data")
+    def _iter_file(
+        self,
+        f: io.BufferedReader,
+        file_idx: int,
+        rc: int,
+        selection: Optional[Set[str]],
+    ) -> Generator[ReadResultLike, None, None]:
+        f.seek(HEADER_SIZE)
+        for _ in range(rc):
+            pos = f.tell()
+            header = f.read(len(RECORD_MARKER) + 8)
+            if len(header) < len(RECORD_MARKER) + 8:
+                raise EOFError("Unexpected EOF while reading record header")
+            if header[: len(RECORD_MARKER)] != RECORD_MARKER:
+                got = header[: len(RECORD_MARKER)].hex()
+                raise EOFError(f"Invalid record marker at {pos} (got 0x{got})")
 
-                if selection is None:
-                    # Full parse path
+            csize, usize = struct.unpack_from('<II', header, len(RECORD_MARKER))
+            compressed = f.read(csize)
+            if len(compressed) < csize:
+                raise EOFError("Unexpected EOF while reading compressed data")
+
+            if selection is None:
+                # Full parse path
+                data = self._decompress_full(file_idx, compressed, usize)
+                yield self._parse_record(data, self._format_versions[file_idx])
+            else:
+                # Peek read_id with partial decompress
+                preview = self.decompressors[file_idx].decompress(compressed, max_output_size=PREVIEW_MAX)
+                if len(preview) < 2:
+                    raise ValueError("Corrupt record: cannot read read_id length from preview")
+                rid_len = self._S_U16.unpack_from(preview, 0)[0]
+                end = 2 + rid_len
+                if len(preview) < end:
+                    # If preview too small for a very long id, fall back to full decompress
+                    data = self._decompress_full(file_idx, compressed, usize)
+                    rid_len = self._S_U16.unpack_from(data, 0)[0]
+                    rid = data[2 : 2 + rid_len].decode("utf-8")
+                else:
+                    rid = preview[2:end].decode("utf-8")
+
+                if rid in selection:
+                    # Now fully decompress and parse
                     data = self._decompress_full(file_idx, compressed, usize)
                     yield self._parse_record(data, self._format_versions[file_idx])
-                else:
-                    # Peek read_id with partial decompress
-                    preview = self.decompressors[file_idx].decompress(compressed, max_output_size=PREVIEW_MAX)
-                    if len(preview) < 2:
-                        raise ValueError("Corrupt record: cannot read read_id length from preview")
-                    rid_len = self._S_U16.unpack_from(preview, 0)[0]
-                    end = 2 + rid_len
-                    if len(preview) < end:
-                        # If preview too small for a very long id, fall back to full decompress
-                        data = self._decompress_full(file_idx, compressed, usize)
-                        rid_len = self._S_U16.unpack_from(data, 0)[0]
-                        rid = data[2 : 2 + rid_len].decode("utf-8")
-                    else:
-                        rid = preview[2:end].decode("utf-8")
-
-                    if rid in selection:
-                        # Now fully decompress and parse
-                        data = self._decompress_full(file_idx, compressed, usize)
-                        yield self._parse_record(data, self._format_versions[file_idx])
-                    # else skip: we already consumed the compressed bytes; continue
+                # else skip: we already consumed the compressed bytes; continue
 
     def build_index(self, *, threads: int = 4) -> None:
         if self._index is not None:
