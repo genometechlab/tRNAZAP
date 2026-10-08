@@ -5,7 +5,7 @@ import queue
 import threading
 import time
 from pathlib import Path
-from typing import Dict, List, Optional, Union, Iterator
+from typing import Dict, List, Optional, Tuple, Union, Iterator
 from uuid import UUID
 from dataclasses import dataclass, field
 
@@ -29,24 +29,9 @@ PathLikeList = Union[PathLike, List[PathLike]]
 
 class SingleReadInference(InferenceBase):
     """
-    Stream reads from POD5, preprocess on CPU, batch on-the-fly,
-    and run inference on GPU.
+    Run inference on one read from POD5, optionally returning CLS attention
+    and token saliency for interpretability.
     """
-
-    def __init__(
-        self,
-        config: Union[ModelConfig, str, Dict],
-        device: Optional[torch.device] = None,
-    ) -> None:
-        self.config: ModelConfig = ModelConfig.load_config(cfg=config)
-        self.device: torch.device = (
-            device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        )
-
-        self.queue_size_mult = 4
-        
-        self.model_loader = ModelLoader(self.config, self.device)
-        self.model = self.model_loader.get_model(load_checkpoint=True).eval()
 
     def predict(
         self,
@@ -58,28 +43,34 @@ class SingleReadInference(InferenceBase):
         saliency_use_abs: Optional[bool] = False,
         saliency_reduce: Optional[str] = 'l2',
         saliency_normalize: Optional[bool] = False,
-    ) -> Optional[InferenceResults]:
-        
+    ) -> Union[ReadResultDetailed, Tuple[ReadResultDetailed, Dict]]:
+        """
+        Returns the read's ReadResultDetailed, or ``(result, aux)`` when attention
+        or saliency is requested. Raises KeyError if the read is not in the POD5 files.
+        """
         pod5_pathset: PathSet = self._resolve_paths(pod5_paths)
+        read_id = str(UUID(read_id))  # validate and normalise
+        model_input = None
         with pod5.DatasetReader(
             pod5_pathset.paths, recursive=True, max_cached_readers=4, threads=4
         ) as reader:
-            reads_iter = (reader.reads(selection={UUID(r) for r in [read_id,]}))
-            for rec in reads_iter:
+            for rec in reader.reads(selection={UUID(read_id)}):
                 try:
                     model_input = self._process_record(rec)
                 except Exception as exc:
-                    raise Exception("Failed on read %s: %s", rec.read_id, exc)
+                    raise RuntimeError(f"Failed to preprocess read {read_id}") from exc
+
+        if model_input is None:
+            raise KeyError(f"Read {read_id} not found in {pod5_pathset.to_list()}")
 
         batch_t = collate_fn([model_input,])
-        
-        assert batch_t["metadata"]["read_id"][0] == read_id
 
         inputs = {k: v.to(self.device) for k, v in batch_t["inputs"].items()}
-        use_amp = self.config.float_dtype == "float16" and self.device != "cpu"
+        use_amp = (self.config.float_dtype in {"float16", "fp16"}) and (self.device.type != "cpu")
+        dtype = torch.float16 if self.config.float_dtype in {"float16", "fp16"} else None
 
         with torch.no_grad(), torch.amp.autocast(
-            device_type=self.device, enabled=use_amp
+            device_type=self.device.type, enabled=use_amp, dtype=dtype
         ):
             outputs = self.model(**inputs)
 
