@@ -1,10 +1,12 @@
 import torch
 import torch.nn as nn
+from collections import OrderedDict
 from typing import Optional, Literal, Iterable, List
 from .factory import EncoderWrapper
 from .factory import SignalEncoder, IdentitySignalEncoder, build_signal_encoder
 
-Task = Literal["fragmentation", "classification", "segmentation"]
+Task = Literal["fragmentation", "classification", "segmentation", "boundary"]
+HeadType = Literal["mlp", "linear"]
 
 
 class tRNAZAPFormer(nn.Module):
@@ -24,8 +26,6 @@ class tRNAZAPFormer(nn.Module):
         dim_feedforward: int = 512,
         norm_first: bool = False,
         num_layers: int = 4,
-        dropout_rate_transformer: float = 0.2,
-        dropout_rate_fc: float = 0.2,
         max_seq_len: int = 1000,
         # --- Task heads ---
         num_classification_classes: int = 22,
@@ -34,12 +34,17 @@ class tRNAZAPFormer(nn.Module):
         positional_encoding_type: Literal["learnable", "sinusoidal", "rope"] = "sinusoidal",
         # --- Tasks ---
         enabled_tasks: Optional[Iterable[Task]] = None,
+        # "mlp": 3-layer MLP classification/fragmentation heads; "linear": single Linear
+        head_type: HeadType = "mlp",
     ):
         super().__init__()
 
         if enabled_tasks is None:
             enabled_tasks = ("fragmentation", "classification", "segmentation")
         self.enabled_tasks = set(enabled_tasks)
+        if head_type not in ("mlp", "linear"):
+            raise ValueError(f"Invalid head_type '{head_type}'. Expected 'mlp' or 'linear'.")
+        self.head_type = head_type
         use_rope = positional_encoding_type == "rope"
         self.use_rope = use_rope
 
@@ -93,7 +98,6 @@ class tRNAZAPFormer(nn.Module):
             num_heads,
             dim_feedforward,
             num_layers,
-            dropout_rate_transformer,
             norm_first=norm_first,
             use_rope=use_rope,
             max_seq_len=max_seq_len+1,
@@ -104,31 +108,33 @@ class tRNAZAPFormer(nn.Module):
         # ------------------------------------------------------------------
         self.frag_classifier = None
         if "fragmentation" in self.enabled_tasks:
-            self.frag_classifier = nn.Sequential(
-                nn.Linear(hidden_size * 2, 256),
-                nn.ReLU(),
-                nn.Dropout(dropout_rate_fc),
-                nn.Linear(256, 128),
-                nn.ReLU(),
-                nn.Dropout(dropout_rate_fc),
-                nn.Linear(128, 2),
-            )
+            # CLS + masked mean-pooled tokens
+            self.frag_classifier = self._make_head(hidden_size * 2, 2)
 
         self.classifier = None
         if "classification" in self.enabled_tasks:
-            self.classifier = nn.Sequential(
-                nn.Linear(hidden_size, 256),
-                nn.ReLU(),
-                nn.Dropout(dropout_rate_fc),
-                nn.Linear(256, 128),
-                nn.ReLU(),
-                nn.Dropout(dropout_rate_fc),
-                nn.Linear(128, num_classification_classes),
-            )
+            self.classifier = self._make_head(hidden_size, num_classification_classes)
 
         self.token_classifier = None
         if "segmentation" in self.enabled_tasks:
             self.token_classifier = nn.Linear(hidden_size, num_segmentation_classes)
+
+        self.boundary_head = None
+        if "boundary" in self.enabled_tasks:
+            self.boundary_head = nn.Linear(hidden_size, num_segmentation_classes)
+
+    def _make_head(self, in_features: int, out_features: int) -> nn.Module:
+        if self.head_type == "linear":
+            return nn.Linear(in_features, out_features)
+        # Indices 2 and 5 held the Dropout layers used in training; keeping the
+        # original indices keeps checkpoint keys (e.g. "classifier.3.weight") valid.
+        return nn.Sequential(OrderedDict([
+            ("0", nn.Linear(in_features, 256)),
+            ("1", nn.ReLU()),
+            ("3", nn.Linear(256, 128)),
+            ("4", nn.ReLU()),
+            ("6", nn.Linear(128, out_features)),
+        ]))
 
     # ----------------------------------------------------------------------
     # Internal helpers
@@ -236,6 +242,19 @@ class tRNAZAPFormer(nn.Module):
             mean_pooled = summed / denom
             frag_rep = torch.cat([cls_rep, mean_pooled], dim=1)
             out["fragmentation"] = self.frag_classifier(frag_rep)
+
+        if "boundary" in tasks:
+            tok_rep = encoded[:, 1:]                                 # [B, T, D]
+            region_logits = self.boundary_head(tok_rep)             # [B, T, R]
+            region_probs  = torch.softmax(region_logits, dim=-1)    # per-token dist over regions
+
+            # average over VALID tokens only — padded tokens must not contribute
+            valid = (~padding_mask[:, 1:]).unsqueeze(-1)            # [B, T, 1]
+            region_fracs = (region_probs * valid).sum(dim=1) / valid.sum(dim=1).clamp_min(1.0)  # [B, R]
+
+            boundaries = torch.cumsum(region_fracs, dim=-1)[:, :-1]  # [B, R-1]
+            out["boundary"] = boundaries
+            out["boundary_fracs"] = region_fracs
 
         return out
 

@@ -37,12 +37,16 @@ class ModelConfig:
     hidden_size: int
     dim_feedforward: int
     norm_first: bool
-    dropout: float
     
     # -----------------------------------------------------------------------
     # Model outouts - defaults to all
     # -----------------------------------------------------------------------
     tasks: Optional[List[str]] = None
+
+    # -----------------------------------------------------------------------
+    # Classification/fragmentation heads
+    # -----------------------------------------------------------------------
+    head_type: str = "mlp"                         # "mlp" | "linear"
 
     # -----------------------------------------------------------------------
     # Signal encoder stem
@@ -77,6 +81,7 @@ class ModelConfig:
     def __post_init__(self):
         self._validate_stem()
         self._validate_positional_encoding()
+        self._validate_head_type()
 
     def _validate_stem(self) -> None:
         if self.stem_type == "identity":
@@ -131,6 +136,13 @@ class ModelConfig:
             raise ValueError(
                 f"Unknown positional_encoding_type '{self.positional_encoding_type}'. "
                 f"Expected one of {valid_pe}."
+            )
+
+    def _validate_head_type(self) -> None:
+        valid_heads = {"mlp", "linear"}
+        if self.head_type not in valid_heads:
+            raise ValueError(
+                f"Unknown head_type '{self.head_type}'. Expected one of {valid_heads}."
             )
 
     # -----------------------------------------------------------------------
@@ -279,6 +291,8 @@ class ModelLoader:
             enabled_tasks=self.config.tasks,
             # Positional encoding
             positional_encoding_type=self.config.positional_encoding_type,
+            # Heads
+            head_type=self.config.head_type,
         )
 
         if self.config.float_dtype == "float64":
