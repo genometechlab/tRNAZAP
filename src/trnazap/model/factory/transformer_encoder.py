@@ -6,22 +6,6 @@ from typing import Literal, Optional, Tuple
 from .positional_encodings import RoPEEmbedding
 
 
-class TransformerEncoderWrapper(nn.Module):
-    def __init__(self, hidden_dim, num_heads, dim_feedforward, num_layers, dropout):
-        super().__init__()
-        encoder_layer = nn.TransformerEncoderLayer(
-            d_model=hidden_dim,
-            nhead=num_heads,
-            dim_feedforward=dim_feedforward,
-            dropout=dropout,
-            activation="relu",
-            batch_first=True,
-        )
-        self.encoder = nn.TransformerEncoder(encoder_layer, num_layers)
-
-    def forward(self, x, padding_mask):
-        return self.encoder(x, src_key_padding_mask=padding_mask)
-    
 #----------------------------------------------
 # The following classes are reserved for tRNAZAPformer
 #----------------------------------------------
@@ -33,7 +17,6 @@ class MultiheadAttention(nn.Module):
     Args:
         embed_dim:    Total embedding dimension.
         num_heads:    Number of attention heads.
-        dropout:      Attention dropout probability.
         batch_first:  If True, input/output tensors are [B, T, D].
                       Must be True to match the rest of the codebase.
         use_rope:     If True, apply RoPE to Q and K before attention.
@@ -45,7 +28,6 @@ class MultiheadAttention(nn.Module):
         self,
         embed_dim: int,
         num_heads: int,
-        dropout: float = 0.0,
         batch_first: bool = True,
         use_rope: bool = False,
         rope_base: int = 10000,
@@ -58,7 +40,6 @@ class MultiheadAttention(nn.Module):
         self.embed_dim = embed_dim
         self.num_heads = num_heads
         self.head_dim = embed_dim // num_heads
-        self.dropout = dropout
         self.use_rope = use_rope
 
         # Packed QKV projection — same layout as nn.MultiheadAttention
@@ -67,8 +48,6 @@ class MultiheadAttention(nn.Module):
 
         # Output projection — same name as nn.MultiheadAttention for compat
         self.out_proj = nn.Linear(embed_dim, embed_dim, bias=True)
-
-        self.attn_dropout = nn.Dropout(dropout)
 
         if use_rope:
             self.rope = RoPEEmbedding(
@@ -180,7 +159,6 @@ class MultiheadAttention(nn.Module):
 
             attn_w = torch.softmax(scores, dim=-1)
             attn_w = torch.nan_to_num(attn_w, nan=0.0)              # guard full-pad rows
-            attn_w = self.attn_dropout(attn_w)
 
             out = torch.matmul(attn_w, V)                           # [B, H, T, head_dim]
             out = self._merge_heads(out)
@@ -210,7 +188,6 @@ class MultiheadAttention(nn.Module):
             out = F.scaled_dot_product_attention(
                 Q, K, V,
                 attn_mask=combined_mask,
-                dropout_p=self.dropout if self.training else 0.0,
             )                                                        # [B, H, T, head_dim]
             out = self._merge_heads(out)
             out = self.out_proj(out)
@@ -223,7 +200,6 @@ class EncoderLayer(nn.Module):
         d_model: int,
         nhead: int,
         dim_feedforward: int,
-        dropout: float = 0.1,
         activation: str = "relu",
         batch_first: bool = True,
         norm_first: bool = False,
@@ -238,7 +214,6 @@ class EncoderLayer(nn.Module):
         self.self_attn = MultiheadAttention(
             embed_dim=d_model,
             num_heads=nhead,
-            dropout=dropout,
             batch_first=batch_first,
             use_rope=use_rope,
             max_seq_len=max_seq_len,
@@ -246,10 +221,6 @@ class EncoderLayer(nn.Module):
 
         self.linear1 = nn.Linear(d_model, dim_feedforward)
         self.linear2 = nn.Linear(dim_feedforward, d_model)
-
-        self.dropout = nn.Dropout(dropout)
-        self.dropout1 = nn.Dropout(dropout)
-        self.dropout2 = nn.Dropout(dropout)
 
         self.norm1 = nn.LayerNorm(d_model)
         self.norm2 = nn.LayerNorm(d_model)
@@ -277,10 +248,9 @@ class EncoderLayer(nn.Module):
                 need_weights=need_weights,
                 average_attn_weights=not need_weights,
             )
-            x = x + self.dropout1(attn_out)
+            x = x + attn_out
             x_norm = self.norm2(x)
-            ffn_out = self.linear2(self.dropout(self.activation(self.linear1(x_norm))))
-            x = x + self.dropout2(ffn_out)
+            x = x + self.linear2(self.activation(self.linear1(x_norm)))
         else:
             attn_out, attn_w = self.self_attn(
                 x, x, x,
@@ -289,10 +259,9 @@ class EncoderLayer(nn.Module):
                 need_weights=need_weights,
                 average_attn_weights=not need_weights,
             )
-            x = x + self.dropout1(attn_out)
+            x = x + attn_out
             x = self.norm1(x)
-            ffn_out = self.linear2(self.dropout(self.activation(self.linear1(x))))
-            x = x + self.dropout2(ffn_out)
+            x = x + self.linear2(self.activation(self.linear1(x)))
             x = self.norm2(x)
 
         return (x, attn_w) if need_weights else x
@@ -305,7 +274,6 @@ class EncoderWrapper(nn.Module):
         nhead: int,
         dim_feedforward: int,
         num_layers: int,
-        dropout: float = 0.1,
         activation: str = "relu",
         norm_first: bool = False,
         use_rope: bool = False,
@@ -317,7 +285,6 @@ class EncoderWrapper(nn.Module):
                 d_model=d_model,
                 nhead=nhead,
                 dim_feedforward=dim_feedforward,
-                dropout=dropout,
                 activation=activation,
                 batch_first=True,
                 norm_first=norm_first,
