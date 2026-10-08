@@ -1,3 +1,6 @@
+import json
+import struct
+
 import numpy as np
 import pytest
 
@@ -9,7 +12,7 @@ from trnazap.storages.read_results import ReadResult, ReadResultDetailed
 
 def _metadata():
     return InferenceMetadata(
-        chunk_size=18, max_seq_len=200, model_type="test", model_name="tRNAZAPFormer",
+        chunk_size=18, max_seq_len=200, model_name="tRNAZAPFormer",
         num_classification_classes=5, num_segmentation_classes=4,
         label_names={str(i): f"tRNA-{i}" for i in range(5)},
         batch_size=2, device="cpu", float_dtype="float32",
@@ -210,3 +213,83 @@ def test_staging_dir_abort_leaves_partials_without_publishing(tmp_path, reads):
 def test_staging_dir_must_exist(tmp_path):
     with pytest.raises(FileNotFoundError):
         ZIRShardManager(tmp_path / "a.zir", _metadata(), staging_dir=tmp_path / "missing")
+
+
+def _rewrite_header_raw(path, meta: dict, version: int):
+    """Give an archive a hand-made header (as older/newer writers would produce)."""
+    from trnazap.io.archive_format import HEADER_SIZE, MAGIC_BYTES
+    with open(path, "r+b") as f:
+        f.seek(len(MAGIC_BYTES) + 4)
+        (count,) = struct.unpack("<I", f.read(4))
+        body = json.dumps(meta).encode()
+        f.seek(0)
+        f.write(MAGIC_BYTES + struct.pack("<III", version, count, len(body)) + body)
+        f.write(b"\x00" * (HEADER_SIZE - f.tell()))
+
+
+def test_reader_accepts_v101_header_with_dropped_and_unknown_keys(tmp_path, reads):
+    path = tmp_path / "old.zir"
+    with ZIRWriter(path, _metadata()) as w:
+        for r in reads:
+            w.add_result(r.to_compressed())
+    from dataclasses import asdict
+    meta = {k: v for k, v in asdict(_metadata()).items()
+            if k not in ("tasks", "head_type", "checkpoint_sha256", "run_id", "trnazap_version")}
+    meta["model_type"] = "transformer"      # written by <= v101, since dropped
+    meta["some_future_field"] = 1           # unknown to this reader
+    _rewrite_header_raw(path, meta, version=101)
+    with ZIRReader(path) as reader:
+        md = reader.metadata
+        assert md.tasks is None and md.run_id is None
+        assert reader.metadata_dict["some_future_field"] == 1  # still visible raw
+        assert [r.read_id for r in reader] == [r.read_id for r in reads]
+
+
+def test_reader_rejects_newer_format_with_upgrade_message(tmp_path, reads):
+    path = tmp_path / "future.zir"
+    with ZIRWriter(path, _metadata()) as w:
+        w.add_result(reads[0])
+    from dataclasses import asdict
+    _rewrite_header_raw(path, asdict(_metadata()), version=999)
+    with pytest.raises(ValueError, match="newer trnazap"):
+        ZIRReader(path)
+
+
+def test_summary_nulls_roundtrip(tmp_path, reads):
+    d = reads[0]
+    no_frag = ReadResultDetailed(read_id="nofrag", _logits={
+        "classification": d.logits["classification"], "segmentation": d.logits["segmentation"]},
+        num_chunks=d.num_chunks, chunk_size=18, cropped=False)
+    no_seg = ReadResultDetailed(read_id="noseg", _logits={
+        "classification": d.logits["classification"]}, num_chunks=d.num_chunks, chunk_size=18,
+        cropped=False)
+    a, b = no_frag.to_compressed(), no_seg.to_compressed()
+    assert a.fragmented is None and a.variable_region_range is not None
+    assert b.fragmented is None and b.variable_region_range is None
+
+    path = tmp_path / "nulls.zir"
+    with ZIRWriter(path, _metadata()) as w:
+        w.add_result(a)
+        w.add_result(b)
+        w.add_result(reads[1].to_compressed())   # a full model: real values
+    with ZIRReader(path) as reader:
+        got = {r.read_id: r for r in reader}
+    assert got["nofrag"].fragmented is None
+    assert got["noseg"].variable_region_range is None
+    assert isinstance(got[reads[1].read_id].fragmented, bool)
+    assert got[reads[1].read_id].variable_region_range is not None
+
+
+def test_shard_manager_writes_final_metadata_to_every_shard(tmp_path, reads):
+    md = _metadata()
+    md.run_id = "20261008-120000_abcdef"
+    with ZIRShardManager(tmp_path / "out", md, 3) as manager:
+        assert manager.tmp_dir.name == ".tmp_20261008-120000_abcdef"
+        for r in reads:
+            manager.add_result(r)
+        md.total_inference_time = 1.5   # what predict() sets before close
+    for p in sorted((tmp_path / "out").glob("*.zir")):
+        with ZIRReader(p) as reader:
+            assert reader.metadata.num_reads_processed == len(reads)
+            assert reader.metadata.total_inference_time == 1.5
+            assert reader.metadata.run_id == md.run_id

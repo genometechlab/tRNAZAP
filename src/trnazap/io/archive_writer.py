@@ -26,11 +26,29 @@ PARTIAL_SUFFIX = ".partial"
 TMP_DIR_PREFIX = ".tmp_"
 
 
-def make_tmp_dir(output_dir: Path) -> Path:
-    """Create a fresh ``<output_dir>/.tmp_<timestamp>_<id>/`` for one run."""
-    tmp_dir = Path(output_dir) / (
-        f"{TMP_DIR_PREFIX}{time.strftime('%Y%m%d-%H%M%S')}_{uuid.uuid4().hex[:6]}"
-    )
+def _optional_bool(v):
+    return None if v is None else bool(v)
+
+
+def new_run_id() -> str:
+    """A new run id, ``<timestamp>_<6 hex>``."""
+    return f"{time.strftime('%Y%m%d-%H%M%S')}_{uuid.uuid4().hex[:6]}"
+
+
+def run_id_of_tmp_dir(tmp_dir: Path) -> str:
+    """The run id a temp dir is named after (``.tmp_<run_id>``)."""
+    return Path(tmp_dir).name[len(TMP_DIR_PREFIX):]
+
+
+def make_tmp_dir(output_dir: Path, run_id: Optional[str] = None) -> Path:
+    """Create ``<output_dir>/.tmp_<run_id>/`` for one run (a new id if None).
+
+    If that name is taken (e.g. a failed run's dir being re-sharded into the same
+    place), a short random suffix is added rather than reusing it.
+    """
+    tmp_dir = Path(output_dir) / f"{TMP_DIR_PREFIX}{run_id or new_run_id()}"
+    if tmp_dir.exists():
+        tmp_dir = tmp_dir.with_name(f"{tmp_dir.name}_{uuid.uuid4().hex[:4]}")
     tmp_dir.mkdir()
     return tmp_dir
 
@@ -48,6 +66,49 @@ def finalize_tmp_dir(tmp_dir: Path, output_dir: Path) -> List[Path]:
         finals.append(final)
     Path(tmp_dir).rmdir()
     return finals
+
+
+def _header_bytes(metadata: "InferenceMetadata", record_count: int) -> bytes:
+    """The fixed-size header: magic, version, record count, metadata JSON, padding."""
+    meta = asdict(metadata)
+    if meta.get("pod5_paths") is not None and not isinstance(meta["pod5_paths"], list):
+        meta["pod5_paths"] = list(meta["pod5_paths"])  # ensure JSON-serializable
+    meta_bytes = json.dumps(meta, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+
+    fixed = len(MAGIC_BYTES) + 4 + 4 + 4  # magic + version + record_count + meta_len
+    padding = HEADER_SIZE - fixed - len(meta_bytes)
+    if padding < 0:
+        raise ValueError(
+            f"Metadata too large for fixed header: {len(meta_bytes)} bytes "
+            f"(max {HEADER_SIZE - fixed})"
+        )
+    S_U32 = struct.Struct("<I")
+    return b"".join((
+        MAGIC_BYTES,
+        S_U32.pack(FORMAT_VERSION),
+        S_U32.pack(record_count),
+        S_U32.pack(len(meta_bytes)),
+        meta_bytes,
+        b"\x00" * padding,
+    ))
+
+
+def rewrite_header(path: Path, metadata: "InferenceMetadata") -> None:
+    """Replace a closed archive's header metadata, keeping its record count.
+
+    Used at the end of a run so every shard carries the final run totals. If the
+    new metadata doesn't fit the fixed header, the old header is kept (warning).
+    """
+    with open(path, "r+b") as f:
+        f.seek(len(MAGIC_BYTES) + 4)
+        (record_count,) = struct.unpack("<I", f.read(4))
+        try:
+            header = _header_bytes(metadata, record_count)
+        except ValueError as exc:
+            logger.warning("Kept original header of %s: %s", path, exc)
+            return
+        f.seek(0)
+        f.write(header)
 
 
 def warn_existing_outputs(output_dir: Path, existing: List[Path]) -> None:
@@ -152,10 +213,17 @@ class ZIRWriter:
         if not self._file:
             return
         try:
-            # Seek and patch record_count (magic + version)
+            # Rewrite the header with the record count and the metadata as it is
+            # now (end-of-run fields); if it no longer fits, patch only the count.
             self._file.flush()
-            self._file.raw.seek(len(MAGIC_BYTES) + 4)
-            self._file.raw.write(self._S_U32.pack(self.record_count))
+            try:
+                header = _header_bytes(self.metadata, self.record_count)
+                self._file.raw.seek(0)
+                self._file.raw.write(header)
+            except ValueError as exc:
+                logger.warning("Kept original header metadata of %s: %s", self.path, exc)
+                self._file.raw.seek(len(MAGIC_BYTES) + 4)
+                self._file.raw.write(self._S_U32.pack(self.record_count))
             # Return to end to ensure consistent file position
             self._file.raw.seek(0, os.SEEK_END)
             self._file.flush()
@@ -203,37 +271,7 @@ class ZIRWriter:
     # ---------------- Internal: Header ---------------- #
     def _write_header(self) -> None:
         assert self._file is not None
-        f = self._file
-
-        # Magic + version
-        f.write(MAGIC_BYTES)
-        f.write(self._S_U32.pack(FORMAT_VERSION))
-
-        # Placeholder for record_count
-        f.write(self._S_U32.pack(0))
-
-        # Metadata JSON (convert sets to lists, Path to str, etc.)
-        meta = asdict(self.metadata)
-        if meta.get("pod5_paths") is not None and not isinstance(meta["pod5_paths"], list):
-            meta["pod5_paths"] = list(meta["pod5_paths"])  # ensure JSON-serializable
-
-        meta_json = json.dumps(meta, ensure_ascii=False, separators=(",", ":"))
-        meta_bytes = meta_json.encode("utf-8")
-        meta_len = len(meta_bytes)
-
-        # Header layout reserves HEADER_SIZE; enforce fit
-        fixed = len(MAGIC_BYTES) + 4 + 4 + 4  # magic + version + record_count + meta_len
-        total = fixed + meta_len
-        padding = HEADER_SIZE - total
-        if padding < 0:
-            raise ValueError(
-                f"Metadata too large for fixed header: {meta_len} bytes (max {HEADER_SIZE - fixed})"
-            )
-
-        f.write(self._S_U32.pack(meta_len))
-        f.write(meta_bytes)
-        if padding:
-            f.write(b"\x00" * padding)
+        self._file.write(_header_bytes(self.metadata, 0))  # count patched at close
 
     # ---------------- Internal: Serialization ---------------- #
     def _serialize_result(self, rr: ReadResultLike) -> bytes:
@@ -272,9 +310,9 @@ class ZIRWriter:
                 "top3_classes": (rr.top3_classes.tolist()
                                 if hasattr(rr, "top3_classes") and isinstance(rr.top3_classes, np.ndarray)
                                 else list(rr.top3_classes) if hasattr(rr, "top3_classes") else []),
-                "variable_region_range": getattr(rr, "variable_region_range", (-1, -1)),
+                "variable_region_range": getattr(rr, "variable_region_range", (-1, -1)),  # None = not predicted
                 "smoothed_variable_region_range": getattr(rr, "smoothed_variable_region_range", (-1, -1)),
-                "fragmented": bool(getattr(rr, "fragmented", False)),
+                "fragmented": _optional_bool(getattr(rr, "fragmented", False)),
                 "cropped": bool(getattr(rr, "cropped", False)),
             }
             s = json.dumps(summary, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
@@ -409,7 +447,7 @@ class ZIRShardManager:
         self.owns_tmp_dir = staging_dir is None
         if self.owns_tmp_dir:
             self._warn_existing_outputs()
-            self.tmp_dir = make_tmp_dir(self.output_dir)
+            self.tmp_dir = make_tmp_dir(self.output_dir, metadata.run_id)
         else:
             self.tmp_dir = Path(staging_dir)
             if not self.tmp_dir.is_dir():
@@ -514,18 +552,32 @@ class ZIRShardManager:
     
     def close(self) -> None:
         """Close the open shard; if this manager owns the temp dir, finalize it."""
-        self._close_current_shard()
+        self._finish_shards()
         if self.owns_tmp_dir and self.tmp_dir.exists():
             finalize_tmp_dir(self.tmp_dir, self.output_dir)
 
     def abort(self) -> None:
         """Close the open shard and leave all shards in the temp dir as .partial."""
-        self._close_current_shard()
+        self._finish_shards()
         if self.owns_tmp_dir and self.tmp_dir.exists():
             logger.warning(
                 "Run did not finish; %d incomplete shard(s) with %d read(s) left in %s",
                 len(self.shard_paths), self.total_reads, self.tmp_dir,
             )
+
+    def _finish_shards(self) -> None:
+        """Close the open shard and give every shard the final metadata.
+
+        ``num_reads_processed`` becomes the reads written by this manager (all its
+        shards); the caller may have set other end-of-run fields (e.g. the time)
+        on the shared metadata object before calling close()/abort().
+        """
+        self.metadata.num_reads_processed = self.total_reads
+        self._close_current_shard()
+        for final in self.shard_paths:
+            partial = self._partial(final)
+            if partial.exists():
+                rewrite_header(partial, self.metadata)
 
     def __enter__(self) -> "ZIRShardManager":
         return self
