@@ -37,24 +37,27 @@ def load_references(model, reference=None):
     Parameters
     ----------
     model : str
-        'e_coli' or 'yeast'
-    
+        'e_coli', 'yeast' or 'human'
+
     Returns
     -------
-    tuple of (bwa_ref_path, zap_ref_path, bwa_ref_dict, bwa_ref_lens, 
+    tuple of (bwa_ref_path, zap_ref_path, bwa_ref_dict, bwa_ref_lens,
               zap_ref_dict, zap_ref_lens, ref_label_dict)
     """
 
     refs = files('trnazap').joinpath('references')
-    
+
     if model == 'e_coli':
         bwa_ref = str(refs / 'bwa_align_references' / 'eschColi_K_12_MG1655-mature-tRNAs_bwa_subset.biosplints.fa')
         zap_ref = str(refs / 'zap_align_references' / 'eschColi_K_12_MG1655-mature-tRNAs_zap_ref.fa')
     elif model == 'yeast':
         bwa_ref = str(refs / 'bwa_align_references' / 'sacCer3-mature-tRNAs_bwa_subset_biosplints.fa')
         zap_ref = str(refs / 'zap_align_references' / 'sacCer3-mature-tRNAs_zap_ref.fa')
+    elif model == 'human':
+        bwa_ref = str(refs / 'bwa_align_references' / 'hg38-mature-tRNAs_bwa_biosplints.fa')
+        zap_ref = str(refs / 'zap_align_references' / 'hg38-mature-tRNAs_mature.fa')
     else:
-        raise ValueError(f"Unknown model: {model}. Must be 'e_coli' or 'yeast'")
+        raise ValueError(f"Unknown model: {model}. Must be 'e_coli', 'yeast' or 'human'")
     
     # Load reference label dictionary
     viz_path = files('trnazap').joinpath('visualize')
@@ -142,7 +145,7 @@ def generate_aligner_comparison_figures(
     zap_bam : str
         Path to Zap BAM file
     model : str
-        'e_coli' or 'yeast' - determines which package references to use
+        'e_coli', 'yeast' or 'human' - determines which package references to use
     out_dir : str
         Output directory for figures
     out_prefix : str
@@ -398,7 +401,7 @@ if __name__ == "__main__":
     
     if len(sys.argv) < 5:
         print("Usage: python compare_aligners.py <bwa_bam> <zap_bam> <model> <out_dir> [out_prefix] [threads]")
-        print("\nmodel: 'e_coli' or 'yeast'")
+        print("\nmodel: 'e_coli', 'yeast' or 'human'")
         sys.exit(1)
     
     bwa_bam = sys.argv[1]

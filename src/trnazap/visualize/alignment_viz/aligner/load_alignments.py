@@ -37,7 +37,7 @@ def load_alignments(bam_path, ref_dict, ref_lens, five_offset, three_offset,
     three_offset : int
         3' offset to trim (42 for BWA, 0 for Zap)
     model : str
-        'e_coli' or 'yeast'
+        'e_coli', 'yeast' or 'human'
     threads : int
         Number of threads for parallel processing
     ident_threshold : float

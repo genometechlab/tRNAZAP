@@ -437,7 +437,7 @@ trnazap alignment_visualize \
 
 | Flag | Description |
 |------|-------------|
-| `--model`, `-m` | `yeast` or `e_coli` (**required**) |
+| `--model`, `-m` | `yeast`, `e_coli` or `human` (**required**) |
 | `--out_dir`, `-od` | Output directory (**required**) |
 | `--out_prefix`, `-op` | Output file prefix (**required**) |
 | `--bwa_path` | Existing BWA alignment BAM |
