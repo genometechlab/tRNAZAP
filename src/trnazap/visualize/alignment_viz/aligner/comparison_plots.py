@@ -40,8 +40,10 @@ def load_sort_order(model):
         json_path = viz_path / 'alignment_viz' / 'ecoli_label_sort_order.json'
     elif model == 'yeast':
         json_path = viz_path / 'alignment_viz' / 'yeast_label_sort_order.json'
+    elif model == 'human':
+        json_path = viz_path / 'alignment_viz' / 'human_label_sort_order.json'
     else:
-        json_path = viz_path / 'alignment_viz' / 'yeast_label_sort_order.json'
+        raise ValueError(f"Unknown model: {model}. Must be 'e_coli', 'yeast' or 'human'")
     
     with open(str(json_path), 'r') as infile:
         sort_order = json.load(infile)

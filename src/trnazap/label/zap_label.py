@@ -5,13 +5,18 @@ import pickle
 from tqdm import tqdm
 from collections import defaultdict
 
+# Default adapter lengths (yeast / E. coli biosplint). Reference positions < five_prime_len are 5' adapter;
+# positions > ref_len - three_prime_len are 3' adapter, so three_prime_len labels three_prime_len - 1
+# positions (pass the 3' flank length + 1).
 FIVE_PRIME_ADAPTER_LEN = 36   # 5' ligation oligo length
 THREE_PRIME_ADAPTER_LEN = 41  # 3' ligation oligo length
 MIN_TRNA_COVERAGE = 15        # minimum tRNA region coverage to process a read
+MIN_MAPQ = 1                  # reads below this mapping quality are skipped
 
 
 @njit
-def annot_from_read(ref_pos, ref_len, tRNA_code, mv_table, ts, ref_start, ref_end, fragment):
+def annot_from_read(ref_pos, ref_len, tRNA_code, mv_table, ts, ref_start, ref_end, fragment,
+                    five_prime_len, three_prime_len):
     n = len(ref_pos)
     x_label = np.full(n, -1, dtype=np.int32)
     seen_ref_start = False
@@ -36,21 +41,21 @@ def annot_from_read(ref_pos, ref_len, tRNA_code, mv_table, ts, ref_start, ref_en
             elif past_ref_end:
                 # Past ref_end - 3' softclip
                 x_label[i] = 1
-            elif prev_pos < FIVE_PRIME_ADAPTER_LEN:
+            elif prev_pos < five_prime_len:
                 x_label[i] = 2
-            elif prev_pos > ref_len - THREE_PRIME_ADAPTER_LEN:
+            elif prev_pos > ref_len - three_prime_len:
                 # Past ref_end - 3' softclip
                 x_label[i] = 1
-            elif seen_ref_start and not past_ref_end and prev_pos <= ref_len - THREE_PRIME_ADAPTER_LEN:
+            elif seen_ref_start and not past_ref_end and prev_pos <= ref_len - three_prime_len:
                 # Between ref_start and ref_end - internal deletion
                 x_label[i] = tRNA_code
             else:
                 assert 1 == 2, f"{ref_pos} : {i} : {ref_pos[i]}"
         else:  # Mapped position
-            if pos < FIVE_PRIME_ADAPTER_LEN:
+            if pos < five_prime_len:
                 # 5' adapter region
                 x_label[i] = 2
-            elif past_ref_end or pos > ref_len - THREE_PRIME_ADAPTER_LEN:
+            elif past_ref_end or pos > ref_len - three_prime_len:
                 # 3' adapter region
                 x_label[i] = 1
             else:
@@ -91,7 +96,8 @@ def run_length_encode_annotations(annotations):
     #print(encoded)
     return encoded
 
-def check_identity(read, ref_seq, ref_start, ref_end):
+def check_identity(read, ref_seq, ref_start, ref_end,
+                   five_prime_len=FIVE_PRIME_ADAPTER_LEN, three_prime_len=THREE_PRIME_ADAPTER_LEN):
     matches = 0
     mismatches = 0
     deletions = 0
@@ -119,20 +125,20 @@ def check_identity(read, ref_seq, ref_start, ref_end):
             elif past_ref_end:
                 # Past ref_end - 3' softclip
                 continue
-            elif prev_pos < FIVE_PRIME_ADAPTER_LEN:
+            elif prev_pos < five_prime_len:
                 continue
-            elif prev_pos > ref_len - THREE_PRIME_ADAPTER_LEN:
+            elif prev_pos > ref_len - three_prime_len:
                 # Past ref_end - 3' softclip
                 continue
-            elif seen_ref_start and not past_ref_end and prev_pos <= ref_len - THREE_PRIME_ADAPTER_LEN:
+            elif seen_ref_start and not past_ref_end and prev_pos <= ref_len - three_prime_len:
                 # Between ref_start and ref_end - internal deletion
                 insertions += 1
         else:  # Mapped position
-            if pos < FIVE_PRIME_ADAPTER_LEN:
+            if pos < five_prime_len:
                 # 5' adapter region
                 prev_pos = pos
                 continue
-            elif past_ref_end or pos > ref_len - THREE_PRIME_ADAPTER_LEN:
+            elif past_ref_end or pos > ref_len - three_prime_len:
                 # 3' adapter region
                 prev_pos = pos
                 continue
@@ -228,7 +234,9 @@ def disambiguate(read, tRNA_class_entry):
         else:
             return match_key    
 
-def zap_label(bam, ref, out, decoder_dict, min_ident, human_ivt = False):
+def zap_label(bam, ref, out, decoder_dict, min_ident, human_ivt = False,
+              five_prime_len=FIVE_PRIME_ADAPTER_LEN, three_prime_len=THREE_PRIME_ADAPTER_LEN, min_mapq=MIN_MAPQ):
+    """Without decoder_dict, each read keeps its BWA reference as its label."""
     ref_lens = {}
     ref_seqs = {}
     tRNA_labels = {}
@@ -249,10 +257,10 @@ def zap_label(bam, ref, out, decoder_dict, min_ident, human_ivt = False):
     out_dict = {}
     for read in tqdm(af.fetch()):
         
-        if read.is_unmapped or read.mapping_quality == 0 or read.is_secondary or read.is_supplementary or read.has_tag('pi') or read.get_tag('ns') >= 1000000:
+        if read.is_unmapped or read.mapping_quality < min_mapq or read.is_secondary or read.is_supplementary or read.has_tag('pi') or read.get_tag('ns') >= 1000000:
             continue
 
-        if abs(max(read.reference_start, FIVE_PRIME_ADAPTER_LEN) - min(read.reference_end, ref_lens[read.reference_name] - THREE_PRIME_ADAPTER_LEN)) < MIN_TRNA_COVERAGE:
+        if abs(max(read.reference_start, five_prime_len) - min(read.reference_end, ref_lens[read.reference_name] - three_prime_len)) < MIN_TRNA_COVERAGE:
             continue
 
         ref_positions = np.array(read.get_reference_positions(full_length=True))
@@ -261,10 +269,11 @@ def zap_label(bam, ref, out, decoder_dict, min_ident, human_ivt = False):
         ref_positions = np.array(ref_positions, dtype=np.int32)
 
         fragment = False
-        if read.reference_start > FIVE_PRIME_ADAPTER_LEN or read.reference_end < ref_lens[read.reference_name] - THREE_PRIME_ADAPTER_LEN:
+        if read.reference_start > five_prime_len or read.reference_end < ref_lens[read.reference_name] - three_prime_len:
             fragment = True
 
-        matches, mismatches, insertions, deletions = check_identity(read, ref_seqs[read.reference_name], read.reference_start, read.reference_end)
+        matches, mismatches, insertions, deletions = check_identity(read, ref_seqs[read.reference_name], read.reference_start, read.reference_end,
+                                                                    five_prime_len, three_prime_len)
         
         if matches / (matches + mismatches + insertions + deletions) < min_ident:
             continue
@@ -311,8 +320,10 @@ def zap_label(bam, ref, out, decoder_dict, min_ident, human_ivt = False):
                                                     np.array(read.get_tag('mv'), dtype=int), 
                                                     read.get_tag('ts'), 
                                                     read.reference_start, 
-                                                    read.reference_end, 
-                                                    fragment)
+                                                    read.reference_end,
+                                                    fragment,
+                                                    five_prime_len,
+                                                    three_prime_len)
         
     
     with open(out, "wb") as outfile:

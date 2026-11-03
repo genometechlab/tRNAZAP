@@ -19,7 +19,7 @@ def register_subparser(subparsers):
                         "-m",
                         required=True,
                         type=str,
-                        choices = ["e_coli", "yeast"]
+                        choices = ["e_coli", "yeast", "human"]
                        )
 
     parser.add_argument("--out_dir",
