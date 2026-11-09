@@ -44,7 +44,7 @@ and aligns the resulting reads against reference tRNA databases.
 The package exposes two interfaces that share the same underlying code:
 
 1. A **command-line interface** (`trnazap <command>`) — the recommended entry
-   point, used by [`example/run_example.sh`](./example/run_example.sh).
+   point, used by the scripts in [`example/`](./example).
 2. A **Python API** (`from trnazap import ...`) for notebook / programmatic use.
 
 A typical workflow is: **infer** (POD5 → `.zir` inference archive) → **align**
@@ -52,27 +52,34 @@ A typical workflow is: **infer** (POD5 → `.zir` inference archive) → **align
 
 # Available models
 
-Download a model's config (`.yaml`) and weights (`.pth`) and place them like so:
+Every model's config (`.yaml`) and weights (`.pth`) are included in this
+repository, under [`configs/`](./configs) and [`checkpoints/`](./checkpoints):
 
 ```
-<your_project_root>/
+tRNA_zap/
 ├── configs/
 │   └── <model_config>.yaml
 ├── checkpoints/
 │   └── <model_weights>.pth
-├── your_script.py
 └── ...
 ```
 
-| Model / config                                                                                          | Substrate        | Weights            |
-|---------------------------------------------------------------------------------------------------------|------------------|--------------------|
-| [`zap_s54_c79_BIOyeast_fragmented.yaml`](./configs/zap_s54_c79_BIOyeast_fragmented.yaml)                | Yeast (biological) | _(add link)_     |
-| [`zap_s54_c79_IVTyeast_fragmented.yaml`](./configs/zap_s54_c79_IVTyeast_fragmented.yaml)                | Yeast (IVT)      | _(add link)_       |
-| [`zap_s54_c51_BIOecoli_fragmented.yaml`](./configs/zap_s54_c51_BIOecoli_fragmented.yaml)                | E. coli (biological) | _(add link)_   |
-| [`zap_s54_c51_IVTecoli_fragmented.yaml`](./configs/zap_s54_c51_IVTecoli_fragmented.yaml)                | E. coli (IVT)    | _(add link)_       |
+| Model / config                                                                             | Substrate            | Weights                                                                |
+|--------------------------------------------------------------------------------------------|----------------------|------------------------------------------------------------------------|
+| [`zap_s54_c79_BIOyeast_fragmented.yaml`](./configs/zap_s54_c79_BIOyeast_fragmented.yaml)   | Yeast (biological)   | [`.pth`](./checkpoints/zap_s54_c79_BIOyeast_fragmented.pth)            |
+| [`zap_s54_c79_IVTyeast_fragmented.yaml`](./configs/zap_s54_c79_IVTyeast_fragmented.yaml)   | Yeast (IVT)          | [`.pth`](./checkpoints/zap_s54_c79_IVTyeast_fragmented.pth)            |
+| [`zap_s54_c51_BIOecoli_fragmented.yaml`](./configs/zap_s54_c51_BIOecoli_fragmented.yaml)   | E. coli (biological) | [`.pth`](./checkpoints/zap_s54_c51_BIOecoli_fragmented.pth)            |
+| [`zap_s54_c51_IVTecoli_fragmented.yaml`](./configs/zap_s54_c51_IVTecoli_fragmented.yaml)   | E. coli (IVT)        | [`.pth`](./checkpoints/zap_s54_c51_IVTecoli_fragmented.pth)            |
+| [`zap_s36_c79_UNIyeast.yaml`](./configs/zap_s36_c79_UNIyeast.yaml) ⚠️ _experimental_       | Yeast (biological + IVT) | [`.pth`](./checkpoints/zap_s36_c79_UNIyeast.pth)                       |
+| [`zap_s36_c51_UNIecoli.yaml`](./configs/zap_s36_c51_UNIecoli.yaml) ⚠️ _experimental_       | E. coli (biological + IVT) | [`.pth`](./checkpoints/zap_s36_c51_UNIecoli.pth)                       |
 
-> 💡 The path to the weights is set inside the YAML config (`checkpoint_path`).
-> If you move the weights, update that path accordingly.
+> ⚠️ The `UNI` (unified) models are **experimental**. Each one is a single
+> model that handles both biological and IVT samples for its organism, instead
+> of the separate `BIO` and `IVT` models above.
+
+> 💡 The path to the weights is set inside the YAML config (`checkpoint_path`)
+> and is resolved relative to the config file. If you move the weights or copy
+> a config elsewhere, update that path accordingly.
 
 # 1. Inference
 
@@ -447,5 +454,22 @@ trnazap alignment_visualize \
 
 # End-to-end example
 
-A complete, runnable pipeline (infer → align → visualize) for bundled yeast and
-E. coli data lives in [`example/run_example.sh`](./example/run_example.sh).
+A complete, runnable pipeline (infer → align → visualize) for the bundled yeast
+and E. coli data lives in [`example/`](./example):
+
+- [`example/run_example_yeast.sh`](./example/run_example_yeast.sh) — yeast, using
+  `zap_s54_c79_BIOyeast_fragmented`
+- [`example/run_example_ecoli.sh`](./example/run_example_ecoli.sh) — E. coli, using
+  `zap_s54_c51_BIOecoli_fragmented`
+
+The scripts use paths relative to `example/`, so run them from there:
+
+```bash
+cd example
+bash run_example_yeast.sh
+bash run_example_ecoli.sh
+```
+
+Outputs are written to `example/data/<sample>/` (`.zir` inference archive and
+`*_aligned_zap.sorted.bam`) and `example/bwa_mem_vs_zap_comp_results/<sample>/`
+(comparison tables and plots).

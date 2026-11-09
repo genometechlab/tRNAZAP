@@ -65,3 +65,6 @@ tmp/
 .claude/
 CLAUDE.md
 ALIGNMENT_PUBLICATION_FIXES.md
+example/data/*/*_aligned_zap.sorted.bam.bai
+example/bwa_mem_vs_zap_comp_results/
+.nfs*
