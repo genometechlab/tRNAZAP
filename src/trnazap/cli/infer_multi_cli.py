@@ -12,6 +12,7 @@ import pod5
 import torch
 
 from ..inference import Inference
+from ..inference.pod5_inferer import add_bucketing_arguments
 from ..io.archive_writer import finalize_tmp_dir, make_tmp_dir, warn_existing_outputs
 from .logging_setup import setup_worker_logging
 
@@ -83,6 +84,8 @@ def register_subparser(subparsers):
         help="Save complete model outputs instead of compressed ones",
     )
 
+    add_bucketing_arguments(parser)
+
     parser.set_defaults(func=run_infer_multi)
 
 
@@ -126,13 +129,20 @@ def _gpu_worker(
     tmp_dir: Path,
     batch_size: int,
     save_raw: bool,
+    length_buckets,
+    bucket_batch_scaling: float,
 ):
     setup_worker_logging(log_queue, prefix=f"[GPU {gpu_idx}] ")
     shard_idx = None
     try:
         torch.cuda.set_device(gpu_idx)
         engine = _WorkerInference(
-            config_path, device=f"cuda:{gpu_idx}", save_raw=save_raw, counters=counters
+            config_path,
+            device=f"cuda:{gpu_idx}",
+            save_raw=save_raw,
+            length_buckets=length_buckets,
+            bucket_batch_scaling=bucket_batch_scaling,
+            counters=counters,
         )
         while (job := job_queue.get()) is not None:
             shard_idx, read_ids = job
@@ -239,6 +249,8 @@ def run_infer_multi(args):
                     tmp_dir,
                     args.batch_size,
                     args.save_raw,
+                    args.length_buckets,
+                    args.bucket_batch_scaling,
                 ),
                 name=f"gpu{gpu_idx}",
             )
