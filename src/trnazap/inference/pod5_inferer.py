@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import bisect
 import logging
 import queue
 import threading
 import time
 from pathlib import Path
-from typing import Dict, List, Optional, Union, Iterator
+from typing import Dict, Iterator, List, Optional, Sequence, Tuple, Union
 from uuid import UUID
 from dataclasses import dataclass, field
 
@@ -30,6 +31,124 @@ PathLikeList = Union[PathLike, List[PathLike]]
 
 _POLL_S = 0.1
 _STOPPED = object()  # returned by _get once the pipeline has been stopped
+
+# Token-count boundaries of the length buckets: reads are batched only with reads
+# of a similar length, so a batch is not padded to an unrelated long read. Chosen
+# from the read-length distributions of E. coli, yeast and human data at strides
+# 54 and 36 (notebooks/length_distribution.ipynb): steps of 16 where most reads
+# are, coarser steps in the tail. 20 boundaries = 21 buckets.
+DEFAULT_LENGTH_BUCKETS: Tuple[int, ...] = (
+    96, 112, 128, 144, 160, 176, 192, 208, 224, 240, 256,
+    288, 320, 352, 384, 448, 512, 640, 768, 1024,
+)
+# 0 = every bucket uses batch_size (see bucket_batch_sizes)
+DEFAULT_BUCKET_BATCH_SCALING = 0.0
+
+
+def normalize_length_buckets(length_buckets: Optional[Sequence[int]]) -> Tuple[int, ...]:
+    """Validate bucket boundaries; ``None`` or empty means a single bucket."""
+    if not length_buckets:
+        return ()
+    bounds = tuple(int(b) for b in length_buckets)
+    if any(b <= 0 for b in bounds):
+        raise ValueError(f"length_buckets must be positive token counts, got {list(bounds)}")
+    if any(a >= b for a, b in zip(bounds, bounds[1:])):
+        raise ValueError(f"length_buckets must be strictly increasing, got {list(bounds)}")
+    return bounds
+
+
+def bucket_batch_sizes(
+    boundaries: Sequence[int],
+    batch_size: int,
+    max_seq_len: int,
+    scaling: float = DEFAULT_BUCKET_BATCH_SCALING,
+) -> List[int]:
+    """Batch size of each bucket (one per bucket, ``len(boundaries) + 1``).
+
+    With ``scaling`` m, bucket i (upper boundary U_i, the last one ``max_seq_len``)
+    gets ``batch_size * (1 + m * (max_seq_len / U_i - 1))``, rounded. The longest
+    bucket always gets ``batch_size``. m=0: every bucket uses ``batch_size``;
+    m=1: every full batch holds about ``batch_size * max_seq_len`` tokens, the
+    same as a full batch of the longest reads.
+    """
+    if batch_size < 1:
+        raise ValueError(f"batch_size must be >= 1, got {batch_size}")
+    if scaling < 0:
+        raise ValueError(f"bucket_batch_scaling must be >= 0, got {scaling}")
+    uppers = [min(b, max_seq_len) for b in boundaries] + [max_seq_len]
+    return [
+        max(1, round(batch_size * (1 + scaling * (max_seq_len / u - 1))))
+        for u in uppers
+    ]
+
+
+def parse_length_buckets(text: str) -> Tuple[int, ...]:
+    """Parse a CLI value: comma-separated token counts, or "none" for one bucket."""
+    import argparse
+
+    if text.strip().lower() in {"none", ""}:
+        return ()
+    try:
+        return normalize_length_buckets([int(x) for x in text.split(",") if x.strip()])
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            f"expected comma-separated increasing token counts or 'none', got {text!r} ({exc})"
+        ) from None
+
+
+def add_bucketing_arguments(parser) -> None:
+    """Add --length-buckets and --bucket-batch-scaling to an argparse parser."""
+    default = ", ".join(map(str, DEFAULT_LENGTH_BUCKETS))
+    parser.add_argument(
+        "--length-buckets",
+        type=parse_length_buckets,
+        default=DEFAULT_LENGTH_BUCKETS,
+        metavar="T1,T2,...|none",
+        help="Token-count boundaries for grouping reads of similar length into the same "
+        "batch, which cuts padding. Predictions are unchanged (logits can differ by "
+        "float rounding); output order no longer follows the POD5 order. "
+        "'none' = no grouping. "
+        f"Default: {default}",
+    )
+    parser.add_argument(
+        "--bucket-batch-scaling",
+        type=float,
+        default=DEFAULT_BUCKET_BATCH_SCALING,
+        metavar="M",
+        help="[EXPERIMENTAL] Use larger batches for shorter reads. 0 = off (default): "
+        "every batch uses --batch-size. 1 = every full batch holds about as many "
+        "tokens as a full batch of the longest reads. Values in between are more "
+        "conservative; values above 1 exceed that size (warned). The longest reads "
+        "always use --batch-size. More reads are held in memory while batches "
+        "fill (see README).",
+    )
+
+
+class _LengthBucketer:
+    """Collects samples into length buckets and hands back each bucket's batch once full."""
+
+    def __init__(self, boundaries: Sequence[int], batch_sizes: Sequence[int]) -> None:
+        assert len(batch_sizes) == len(boundaries) + 1
+        self.boundaries = list(boundaries)
+        self.batch_sizes = list(batch_sizes)
+        self.buckets: List[List[Dict]] = [[] for _ in batch_sizes]
+
+    def add(self, sample: Dict) -> Optional[List[Dict]]:
+        """Add a sample; return its bucket's batch if that filled it, else None."""
+        i = bisect.bisect_right(self.boundaries, sample["metadata"]["num_tokens"])
+        bucket = self.buckets[i]
+        bucket.append(sample)
+        if len(bucket) < self.batch_sizes[i]:
+            return None
+        self.buckets[i] = []
+        return bucket
+
+    def flush(self) -> Iterator[List[Dict]]:
+        """Yield the leftover (partial) batches, shortest bucket first."""
+        for i, bucket in enumerate(self.buckets):
+            if bucket:
+                self.buckets[i] = []
+                yield bucket
 
 
 def _put(q: queue.Queue, item, stop: threading.Event) -> bool:
@@ -70,7 +189,40 @@ class Inference(InferenceBase):
         config: Union[ModelConfig, str, Dict],
         device: Optional[torch.device] = None,
         save_raw: bool = False,
+        length_buckets: Optional[Sequence[int]] = DEFAULT_LENGTH_BUCKETS,
+        bucket_batch_scaling: float = DEFAULT_BUCKET_BATCH_SCALING,
     ) -> None:
+        """
+        Args
+        ----
+        config        : ModelConfig, path to a YAML config, model name, or dict
+        device        : Torch device; None = CUDA if available, else CPU
+        save_raw      : Keep full ReadResultDetailed reads (default: compress to ReadResult)
+        length_buckets: Token-count boundaries; reads are only batched with reads
+                        of the same bucket, which cuts padding. None = one bucket
+                        (batch in POD5 order). Results come out grouped by
+                        bucket, not in POD5 order
+        bucket_batch_scaling: [EXPERIMENTAL] Grow the batch size of shorter
+                        buckets relative to predict()'s batch_size (see
+                        bucket_batch_sizes). 0 = off; 1 = every full batch holds
+                        about as many tokens as a full batch of the longest
+                        reads. The longest bucket always uses batch_size.
+                        Raises how many reads wait in memory
+        """
+        # Validate before loading the model, so bad values fail fast
+        self.length_buckets: Tuple[int, ...] = normalize_length_buckets(length_buckets)
+        if bucket_batch_scaling < 0:
+            raise ValueError(f"bucket_batch_scaling must be >= 0, got {bucket_batch_scaling}")
+        if bucket_batch_scaling and not self.length_buckets:
+            logger.warning("bucket_batch_scaling has no effect without length_buckets")
+        if bucket_batch_scaling > 1:
+            logger.warning(
+                "bucket_batch_scaling=%s > 1: batches of short reads will hold more tokens "
+                "than a full batch of the longest reads",
+                bucket_batch_scaling,
+            )
+        self.bucket_batch_scaling = float(bucket_batch_scaling)
+
         super().__init__(config=config, device=device)
         self.save_raw = save_raw
 
@@ -93,7 +245,8 @@ class Inference(InferenceBase):
         pod5_paths    : Path to POD5 file(s) or directory
         output_path   : Optional path to save ZIR file(s). If None, only return in-memory results
         read_ids      : List of read-ids to process; None = all reads
-        batch_size    : Number of reads per GPU batch
+        batch_size    : Number of reads per GPU batch (per bucket; shorter buckets
+                        get more with bucket_batch_scaling, see __init__)
         shard_size    : If saving to disk, number of reads per shard (None = single file)
         show_progress : Show progress bars
         return_results: If True, return InferenceResults object (keeps all in memory)
@@ -101,7 +254,7 @@ class Inference(InferenceBase):
         staging_dir   : Existing .tmp_ dir to write the .zir.partial shards into; the
                         caller then finalizes it (see ZIRShardManager). None = this
                         call creates and finalizes its own
-        
+
         Returns
         -------
         InferenceResults if return_results=True, else None
@@ -120,6 +273,7 @@ class Inference(InferenceBase):
         """
         if not return_results and output_path is None:
             raise ValueError("Nothing to do: set output_path or return_results=True")
+        bucketing = self._bucketing(batch_size)
                      
         start = time.time()
         pod5_pathset: PathSet = self._resolve_paths(pod5_paths)
@@ -150,11 +304,9 @@ class Inference(InferenceBase):
         if show_progress:
             producer_pbar, consumer_pbar = self._make_progress_bars(num_reads)
 
-        # Queue for preprocessed samples
-        sample_queue: "queue.Queue[Optional[Dict]]" = queue.Queue(
-            maxsize=batch_size * self.queue_size_mult
-        )
-        
+        # Queue of collated batches, ready for the model
+        batch_queue: "queue.Queue[Optional[Dict]]" = queue.Queue(maxsize=self.queue_size_mult)
+
         stats = {"failed": 0}
         stop = threading.Event()
         errors: List[BaseException] = []
@@ -165,7 +317,8 @@ class Inference(InferenceBase):
             kwargs=dict(
                 pod5_paths=pod5_pathset.paths,
                 read_ids=read_ids,
-                sample_queue=sample_queue,
+                batch_queue=batch_queue,
+                bucketing=bucketing,
                 progress_bar=producer_pbar,
                 stats=stats,
                 stop=stop,
@@ -180,11 +333,10 @@ class Inference(InferenceBase):
         succeeded = False
         try:
             processed_count = self._consumer_loop(
-                sample_queue=sample_queue,
+                batch_queue=batch_queue,
                 in_memory_results=in_memory_results,
                 zir_manager=zir_manager,
-                batch_size=batch_size,
-                progress_bar=consumer_pbar
+                progress_bar=consumer_pbar,
             )
             succeeded = True
         finally:
@@ -223,6 +375,22 @@ class Inference(InferenceBase):
         
         return in_memory_results
 
+    def _bucketing(self, batch_size: int) -> Tuple[Tuple[int, ...], List[int]]:
+        """(boundaries, per-bucket batch sizes) for a run with this batch_size."""
+        bounds, bucket_batch_scaling = self.length_buckets, self.bucket_batch_scaling
+        sizes = bucket_batch_sizes(bounds, batch_size, self.config.max_seq_len, bucket_batch_scaling)
+        if bucket_batch_scaling and bounds:
+            edges = (0,) + bounds
+            logger.info(
+                "Bucket batch scaling %s (experimental), batch size per bucket: %s",
+                bucket_batch_scaling,
+                ", ".join(
+                    f"[{lo},{hi})→{b}"
+                    for lo, hi, b in zip(edges, bounds + ("inf",), sizes)
+                ),
+            )
+        return bounds, sizes
+
     @staticmethod
     def _make_progress_bars(num_reads: Optional[int]):
         """Return the (reading, processed) progress bars; anything with update()/close() works."""
@@ -251,7 +419,8 @@ class Inference(InferenceBase):
         
         Yields
         ------
-        ReadResultDetailed objects as they are processed
+        ReadResultDetailed objects as they are processed (grouped by length
+        bucket, not in POD5 order; see ``__init__`` for the bucketing settings)
         
         Example
         -------
@@ -260,12 +429,11 @@ class Inference(InferenceBase):
                 print(f"Found target read: {result.read_id}")
         """
         pod5_pathset: PathSet = self._resolve_paths(pod5_paths)
-        
-        # Queue for preprocessed samples
-        sample_queue: "queue.Queue[Optional[Dict]]" = queue.Queue(
-            maxsize=batch_size * self.queue_size_mult
-        )
-        
+        bucketing = self._bucketing(batch_size)
+
+        # Queue of collated batches, ready for the model
+        batch_queue: "queue.Queue[Optional[Dict]]" = queue.Queue(maxsize=self.queue_size_mult)
+
         # Queue for results
         result_queue: "queue.Queue[Optional[ReadResultDetailed]]" = queue.Queue(
             maxsize=batch_size * 2
@@ -281,7 +449,8 @@ class Inference(InferenceBase):
             kwargs=dict(
                 pod5_paths=pod5_pathset.paths,
                 read_ids=read_ids,
-                sample_queue=sample_queue,
+                batch_queue=batch_queue,
+                bucketing=bucketing,
                 progress_bar=None,
                 stats=stats,
                 stop=stop,
@@ -296,9 +465,8 @@ class Inference(InferenceBase):
         consumer = threading.Thread(
             target=self._consumer_iter_worker,
             kwargs=dict(
-                sample_queue=sample_queue,
+                batch_queue=batch_queue,
                 result_queue=result_queue,
-                batch_size=batch_size,
                 stop=stop,
                 errors=errors,
             ),
@@ -329,18 +497,29 @@ class Inference(InferenceBase):
         self,
         *,
         pod5_paths: Union[PathLike, PathLikeList],
-        sample_queue: "queue.Queue[Optional[Dict]]",
+        batch_queue: "queue.Queue[Optional[Dict]]",
+        bucketing: Tuple[Sequence[int], Sequence[int]],
         read_ids: Optional[List[str]],
         progress_bar: Optional[tqdm.tqdm],
         stats: Optional[Dict[str, int]],
         stop: threading.Event,
         errors: List[BaseException],
     ) -> None:
-        """CPU thread: stream reads → standardise → chunk → queue.
+        """CPU thread: stream reads → standardise → length bucket → collate → queue.
+
+        Each read goes into the bucket of its token count; a bucket that reaches
+        its batch size is collated and queued as one batch. At the end of the
+        input the leftover partial buckets are queued too. Reads therefore reach
+        the model grouped by length, not in POD5 order.
+
+        Memory: besides the queued batches, up to sum(batch_size_i - 1) reads
+        can wait in partly filled buckets (num_buckets * (batch_size - 1)
+        without bucket batch scaling).
 
         Per-read failures are counted in ``stats``; anything else (e.g. unreadable
         POD5, bad read id) is recorded in ``errors`` for the caller to raise.
         """
+        bucketer = _LengthBucketer(*bucketing)
         try:
             with pod5.DatasetReader(
                 pod5_paths, recursive=True, max_cached_readers=4, threads=4
@@ -364,52 +543,44 @@ class Inference(InferenceBase):
                         if progress_bar:
                             progress_bar.update(1)
                             
-                    if sample is not None and not _put(sample_queue, sample, stop):
+                    if sample is None:
+                        continue
+                    batch = bucketer.add(sample)
+                    if batch is not None and not _put(batch_queue, collate_fn(batch), stop):
+                        return
+
+                for batch in bucketer.flush():
+                    if not _put(batch_queue, collate_fn(batch), stop):
                         return
 
         except Exception as exc:
             errors.append(exc)
         finally:
-            _put(sample_queue, None, stop)
+            _put(batch_queue, None, stop)
             if progress_bar:
                 progress_bar.close()
 
     def _consumer_loop(
         self,
         *,
-        sample_queue: "queue.Queue[Optional[Dict]]",
+        batch_queue: "queue.Queue[Optional[Dict]]",
         in_memory_results: Optional[InferenceResults],
         zir_manager: Optional['ZIRShardManager'],
-        batch_size: int,
-        progress_bar: Optional[tqdm.tqdm]
+        progress_bar: Optional[tqdm.tqdm],
     ) -> int:
-        """Main thread: pop samples, build batches, run GPU, store results."""
-        current_batch: List[Dict] = []
-        finished = False
+        """Main thread: pop collated batches, run the model, store results."""
         processed_count = 0
 
-        while not finished:
-            sample = sample_queue.get()
-            if sample is None:
-                finished = True
-            else:
-                current_batch.append(sample)
+        while (batch := batch_queue.get()) is not None:
+            for result in self._run_gpu_batch(batch):
+                if in_memory_results:
+                    in_memory_results.add_result(result)
+                if zir_manager:
+                    zir_manager.add_result(result)
+                if progress_bar:
+                    progress_bar.update(1)
+                processed_count += 1
 
-            if finished or len(current_batch) == batch_size:
-                if current_batch:
-                    batch_results = self._run_gpu_batch(current_batch)
-                    
-                    for result in batch_results:
-                        if in_memory_results:
-                            in_memory_results.add_result(result)
-                        if zir_manager:
-                            zir_manager.add_result(result)
-                        if progress_bar:
-                            progress_bar.update(1)
-                        processed_count += 1
-                    
-                    current_batch = []
-        
         if progress_bar:
             progress_bar.close()
             
@@ -418,39 +589,27 @@ class Inference(InferenceBase):
     def _consumer_iter_worker(
         self,
         *,
-        sample_queue: "queue.Queue[Optional[Dict]]",
+        batch_queue: "queue.Queue[Optional[Dict]]",
         result_queue: "queue.Queue[Optional[ReadResultDetailed]]",
-        batch_size: int,
         stop: threading.Event,
         errors: List[BaseException],
     ) -> None:
-        """GPU thread for iterator: process batches and queue results."""
-        current_batch: List[Dict] = []
+        """GPU thread for iterator: run collated batches and queue results."""
         try:
             while True:
-                sample = _get(sample_queue, stop)
-                if sample is _STOPPED:
+                batch = _get(batch_queue, stop)
+                if batch is None or batch is _STOPPED:
                     return
-                if sample is not None:
-                    current_batch.append(sample)
-
-                if current_batch and (sample is None or len(current_batch) == batch_size):
-                    for result in self._run_gpu_batch(current_batch):
-                        if not _put(result_queue, result, stop):
-                            return
-                    current_batch = []
-
-                if sample is None:
-                    return
+                for result in self._run_gpu_batch(batch):
+                    if not _put(result_queue, result, stop):
+                        return
         except Exception as exc:
             errors.append(exc)
         finally:
             _put(result_queue, None, stop)  # Sentinel
 
-    def _run_gpu_batch(self, batch: List[Dict]) -> List[ReadResultDetailed]:
-        """Collate, push to GPU, run model, return results."""
-        batch_t = collate_fn(batch)
-
+    def _run_gpu_batch(self, batch_t: Dict) -> List[ReadResultDetailed]:
+        """Push a collated batch (see collate_fn) to the device, run the model, return results."""
         inputs = {k: v.to(self.device) for k, v in batch_t["inputs"].items()}
         use_amp = (self.config.float_dtype in {"float16", "fp16"}) and (self.device.type != "cpu")
         dtype = torch.float16 if self.config.float_dtype in {"float16", "fp16"} else None
