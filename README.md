@@ -14,6 +14,7 @@
   - [1.1 Running inference](#11-running-inference)
     - [Python API](#python-api)
     - [CLI — `infer` and `infer-multi`](#cli--infer-and-infer-multi)
+    - [Length-grouped batching](#length-grouped-batching)
   - [1.2 Working with results](#12-working-with-results)
     - [In memory — `InferenceResults`](#in-memory--inferenceresults)
     - [On disk — `ZIRReader`](#on-disk--zirreader)
@@ -118,6 +119,8 @@ infer_engine = Inference(
     "configs/zap_s54_c79_BIOyeast_fragmented.yaml",
     device="cuda",
     save_raw=False,
+    # length_buckets=None,        # turn off length-grouped batching (on by default)
+    # bucket_batch_scaling=0.0,   # experimental, see "Length-grouped batching"
 )
 
 results = infer_engine.predict(
@@ -167,6 +170,8 @@ trnazap infer \
 | `--save-raw` | Keep full `ReadResultDetailed` reads (default: compress to `ReadResult`) |
 | `--no-progress` | Disable progress bars |
 | `--force-cpu` | Force CPU-only inference (default: use CUDA if available) |
+| `--length-buckets` | Length groups for batching, as token counts (`128,192,...`), or `none` to turn grouping off (default: see [below](#length-grouped-batching)) |
+| `--bucket-batch-scaling` | ⚠️ _Experimental._ Larger batches for shorter reads; `0` = off (default). See [below](#length-grouped-batching) |
 
 #### `trnazap infer-multi` (multi-GPU)
 
@@ -193,10 +198,87 @@ trnazap infer-multi \
 | `--gpus` | Number of GPUs to use (default: all detected via `torch.cuda.device_count()`) |
 | `--save-raw` | Keep full `ReadResultDetailed` reads (default: compress to `ReadResult`) |
 | `--no-progress` | Disable per-worker progress bars |
+| `--length-buckets` | Same as for `infer` |
+| `--bucket-batch-scaling` | Same as for `infer` (⚠️ _experimental_) |
 
 > 💡 The result is several `.zir` shards. Feed them all to `trnazap align` at
 > once (`--inference shard0.zir shard1.zir ...`), or open them together with a
 > single `ZIRReader([...])`.
+
+#### Length-grouped batching
+
+Reads in a batch are padded to the length of the longest one, and padding is
+wasted GPU work. To keep it small, inference groups reads of similar length
+and builds each batch from a single group, so short reads are no longer padded
+to match an occasional long one. This is **on by default** and **does not
+change the results** (up to floating-point rounding), only how fast they arrive.
+
+Read length is measured in *tokens*: signal samples divided by the model's
+`chunk_size` (54 or 36), capped at the model's `max_seq_len` (1200). The default
+groups are, in tokens:
+
+```
+<96 · 96–111 · 112–127 · … (steps of 16) … · 240–255 ·
+256–287 · 288–319 · 320–351 · 352–383 · 384–447 · 448–511 ·
+512–639 · 640–767 · 768–1023 · ≥1024
+```
+
+i.e. the boundaries `96, 112, 128, 144, 160, 176, 192, 208, 224, 240, 256, 288,
+320, 352, 384, 448, 512, 640, 768, 1024` (21 groups). They are fine where most
+tRNA reads fall and coarse in the rare long tail, and were picked from the
+read-length distributions of E. coli, yeast and human data for both model
+strides.
+In simulation they cut the padding from 50–80% of every batch to about 5%.
+
+**What changes for you**
+
+- **Output order.** Reads come out group by group, not in POD5 order. Results
+  are looked up by read ID everywhere, so nothing downstream depends on the
+  order. With `--shard-size`, each shard holds the reads that were done
+  together.
+- **Memory.** A group's reads wait in memory until there are `--batch-size` of
+  them; whatever is left at the end of the input is processed as smaller
+  batches. So up to about *groups × batch size* reads can be waiting: with the
+  21 default groups and `--batch-size 1024`, about 21,500 reads. That is
+  typically under 1 GB of signal, and at most about 1.7 GB if every group fills
+  up with reads at its upper length (`chunk_size` 54; less for 36).
+- **Custom groups.** `--length-buckets 128,192,256,384` sets your own
+  boundaries; `--length-buckets none` turns grouping off and batches reads in
+  POD5 order, as before. In Python, pass `length_buckets=[128, 192, 256, 384]`
+  or `length_buckets=None` (and `bucket_batch_scaling=...`) when creating the
+  `Inference` engine.
+
+**Larger batches for short reads — `--bucket-batch-scaling` (⚠️ experimental)**
+
+With grouping alone, every batch has `--batch-size` reads, so a batch of short
+reads uses much less GPU memory than a batch of long ones. `--batch-size` has
+to be chosen for the long ones, and the GPU is under-used on everything else.
+`--bucket-batch-scaling M` gives shorter groups proportionally larger batches:
+
+- `0` — off (default): every group uses `--batch-size`.
+- `1` — every full batch holds about as many tokens as a full batch of the
+  longest reads, so all batches cost about the same.
+- between `0` and `1` — part of the way there; a more cautious setting.
+- above `1` — short-read batches get *bigger* than a full batch of long reads;
+  allowed, but a warning is logged and it can run out of GPU memory.
+
+The longest group always uses exactly `--batch-size`, so if that batch size
+fits your GPU today, any value up to `1` fits too. For example, with
+`--batch-size 1024` and `max_seq_len` 1200:
+
+| Group (tokens) | `M = 0` | `M = 0.5` | `M = 1` |
+|---|---|---|---|
+| `<96` | 1024 | 6912 | 12800 |
+| `240–255` | 1024 | 2912 | 4800 |
+| `≥1024` | 1024 | 1024 | 1024 |
+
+The actual batch size per group is logged when the run starts.
+
+> ⚠️ Larger batches also mean more reads waiting in memory while their groups
+> fill: at `M = 1` with the default groups, up to about 107 × `--batch-size`
+> reads (≈110,000 at `--batch-size 1024`), i.e. up to about 5.6 GB of signal
+> (`chunk_size` 54). Check that the machine has the RAM to spare — `infer-multi`
+> needs this once per GPU.
 
 ## 1.2 Working with results
 
