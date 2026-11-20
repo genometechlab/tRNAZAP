@@ -213,3 +213,87 @@ def test_default_engine_uses_default_buckets():
 def test_bad_bucketing_settings_rejected_at_construction(kw):
     with pytest.raises(ValueError):
         _engine(**kw)
+
+
+# ---------------------------------------------------------------- loader workers & outputs
+
+@needs_pod5
+def test_save_raw_segmentation_is_trimmed_to_the_read(bucketed, read_ids, tmp_path):
+    from trnazap.io import ZIRReader
+
+    out = tmp_path / "run.zir"
+    results = bucketed.predict(POD5, read_ids=read_ids, batch_size=8, output_path=out,
+                               show_progress=False)
+    for r in results:
+        assert r._logits["segmentation"].shape[0] == r.num_chunks
+    with ZIRReader(out) as reader:
+        for r in reader:
+            assert r._logits["segmentation"].shape[0] == r.num_chunks
+
+
+@needs_pod5
+@pytest.mark.parametrize("num_workers", [0, 1, 3])
+def test_every_read_processed_exactly_once(num_workers):
+    engine = _engine(length_buckets=BUCKETS, num_workers=num_workers)
+    with pod5.Reader(POD5) as r:
+        all_ids = sorted(str(rec.read_id) for rec in r.reads())
+    seen = [res.read_id for res in engine.predict_iter(POD5, batch_size=16)]
+    assert sorted(seen) == all_ids  # no read missing, none twice
+
+
+@needs_pod5
+@pytest.mark.parametrize("num_workers", [0, 3])
+def test_worker_count_does_not_change_results(plain, read_ids, num_workers):
+    engine = _engine(length_buckets=BUCKETS, num_workers=num_workers)
+    kw = dict(read_ids=read_ids, batch_size=8, show_progress=False)
+    _assert_same(_logits(plain.predict(POD5, **kw)), _logits(engine.predict(POD5, **kw)))
+
+
+@needs_pod5
+def test_early_stop_shuts_down_worker_processes(read_ids):
+    import multiprocessing
+
+    engine = _engine(length_buckets=BUCKETS, num_workers=3)
+    it = engine.predict_iter(POD5, read_ids=read_ids, batch_size=1)
+    next(it)
+    assert multiprocessing.active_children()
+    it.close()
+    assert not multiprocessing.active_children()
+
+
+def test_negative_num_workers_rejected():
+    with pytest.raises(ValueError):
+        _engine(num_workers=-1)
+
+
+# ---------------------------------------------------------------- settings logging
+
+
+def _table_lines(caplog):
+    return [r for r in caplog.records if "batch size per bucket" in r.getMessage()]
+
+
+@needs_pod5
+def test_bucket_table_logged_once_per_engine(read_ids, caplog):
+    engine = _engine(length_buckets=BUCKETS, bucket_batch_scaling=1.0, num_workers=0)
+    kw = dict(read_ids=read_ids[:10], batch_size=8, show_progress=False)
+    with caplog.at_level("INFO", logger="trnazap.inference.pod5_inferer"):
+        for _ in range(3):  # like infer-multi running several chunks on one GPU
+            engine.predict(POD5, **kw)
+        assert len(_table_lines(caplog)) == 1
+        engine.predict(POD5, **{**kw, "batch_size": 4})  # new batch size → new table
+        assert len(_table_lines(caplog)) == 2
+
+
+@needs_pod5
+def test_settings_logging_can_be_turned_off(read_ids, caplog):
+    class Quiet(Inference):
+        _log_settings = False
+
+    torch.manual_seed(0)
+    with caplog.at_level("INFO", logger="trnazap.inference.pod5_inferer"):
+        engine = Quiet(CONFIG, device="cpu", length_buckets=None,
+                       bucket_batch_scaling=2.0, num_workers=0)
+        engine.predict(POD5, read_ids=read_ids[:10], batch_size=8, show_progress=False)
+    assert not [r for r in caplog.records if "bucket_batch_scaling" in r.getMessage()]
+    assert not _table_lines(caplog)

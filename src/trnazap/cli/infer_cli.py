@@ -8,7 +8,7 @@ from typing import Optional
 import torch
 
 from ..inference import Inference
-from ..inference.pod5_inferer import add_bucketing_arguments
+from ..inference.pod5_inferer import add_batching_arguments
 
 logger = logging.getLogger(__name__)
 
@@ -76,7 +76,7 @@ def register_subparser(subparsers):
         help="Force CPU-only inference",
     )
 
-    add_bucketing_arguments(parser)
+    add_batching_arguments(parser)
 
     parser.set_defaults(func=run_infer)
 
@@ -101,6 +101,7 @@ def run_infer(args):
         save_raw=args.save_raw,
         length_buckets=args.length_buckets,
         bucket_batch_scaling=args.bucket_batch_scaling,
+        num_workers=args.num_workers,
     )
 
     # run prediction

@@ -43,6 +43,46 @@ def _trnazap_version() -> Optional[str]:
 PathLike = Union[str, Path]
 PathLikeList = Union[PathLike, List[PathLike]]
 
+
+def preprocess_signal(
+    signal: np.ndarray, read_id: str, *, stride: int, max_seq_len: int, dtype
+) -> Dict:
+    """
+    Return a single pre-processed sample dict for one read.
+
+    Signal is z-scored and truncated to the nearest multiple of
+    ``stride``, then cropped to ``max_seq_len`` tokens and stored as a
+    1-D array [N]. Token count is computed here so collate_fn and the
+    model receive consistent length values.
+
+    A plain function (not a method) so DataLoader worker processes can run
+    it without a copy of the model.
+    """
+    sig = standardize_signal(signal.astype(dtype))
+
+    # Truncate to nearest multiple of stride
+    max_samples = max_seq_len * stride
+    sig = sig[: (sig.shape[0] // stride) * stride]  # drop last incomplete chunk
+    cropped = False
+    if len(sig) > max_samples:
+        sig = sig[:max_samples]
+        cropped = True
+
+    num_tokens = len(sig) // stride
+    sig = sig.astype(dtype)
+
+    return dict(
+        inputs=dict(
+            signal=sig,           # [N]  raw 1-D signal
+            length=len(sig),      # raw sample count — model converts to tokens
+        ),
+        metadata=dict(
+            read_id=read_id,
+            num_tokens=num_tokens,
+            cropped=cropped
+        ),
+    )
+
 class InferenceBase(ABC):
 
     def __init__(
@@ -64,43 +104,18 @@ class InferenceBase(ABC):
         self.model = self.model_loader.get_model(load_checkpoint=True).eval()
         self.checkpoint_sha256 = _sha256(self.model_loader.checkpoint_path)
 
-    def _process_record(self, rec: pod5.ReadRecord) -> Dict:
-        """
-        Return a single pre-processed sample dict for one read.
-
-        Signal is z-scored and truncated to the nearest multiple of
-        effective_stride, then stored as a 1-D array [N].
-        Token count is computed here so collate_fn and the model
-        receive consistent length values.
-        """
-        dtype = np.float64 if self.config.float_dtype == "float64" else np.float32
-
-        sig = rec.signal.astype(dtype)
-        sig = self._local_standardize(sig)
-
-        # Truncate to nearest multiple of effective_stride
-        stride = self.config.effective_stride      # replaces chunk_size in pipeline
-        max_samples = self.config.max_seq_len * stride
-        sig = sig[: (sig.shape[0] // stride) * stride]  # drop last incomplete chunk
-        cropped = False
-        if len(sig) > max_samples:
-            sig = sig[:max_samples]
-            cropped = True
-
-        num_tokens = len(sig) // stride
-        sig = sig.astype(dtype)
-
+    @property
+    def _preprocess_params(self) -> Dict:
+        """Keyword arguments for preprocess_signal under this model's config."""
         return dict(
-            inputs=dict(
-                signal=sig,           # [N]  raw 1-D signal
-                length=len(sig),      # raw sample count — model converts to tokens
-            ),
-            metadata=dict(
-                read_id=str(rec.read_id),
-                num_tokens=num_tokens,
-                cropped=cropped
-            ),
+            stride=self.config.effective_stride,
+            max_seq_len=self.config.max_seq_len,
+            dtype=np.float64 if self.config.float_dtype == "float64" else np.float32,
         )
+
+    def _process_record(self, rec: pod5.ReadRecord) -> Dict:
+        """Pre-processed sample dict for one read (see preprocess_signal)."""
+        return preprocess_signal(rec.signal, str(rec.read_id), **self._preprocess_params)
 
     @staticmethod
     def _local_standardize(signal: np.ndarray) -> np.ndarray:

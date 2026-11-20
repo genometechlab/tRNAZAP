@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import bisect
 import logging
-import queue
-import threading
+import multiprocessing
 import time
+from contextlib import closing
 from pathlib import Path
 from typing import Dict, Iterator, List, Optional, Sequence, Tuple, Union
 from uuid import UUID
@@ -13,9 +13,10 @@ from dataclasses import dataclass, field
 import numpy as np
 import pod5
 import torch
+from torch.utils.data import DataLoader, IterableDataset, get_worker_info
 from tqdm.auto import tqdm
 
-from .inference_base import InferenceBase
+from .inference_base import InferenceBase, preprocess_signal
 from ..config.model_config import ModelConfig, ModelLoader
 from ..feeders import SequenceStandardizer, collate_fn
 from ..storages import InferenceResults, InferenceMetadata, ReadResultDetailed, ReadResult
@@ -29,8 +30,9 @@ logger = logging.getLogger(__name__)
 PathLike = Union[str, Path]
 PathLikeList = Union[PathLike, List[PathLike]]
 
-_POLL_S = 0.1
-_STOPPED = object()  # returned by _get once the pipeline has been stopped
+# Processes that read and prepare batches while the GPU runs (0 = do it in the
+# main process, one batch after another; slower, for debugging)
+DEFAULT_NUM_WORKERS = 4
 
 # Token-count boundaries of the length buckets: reads are batched only with reads
 # of a similar length, so a batch is not padded to an unrelated long read. Chosen
@@ -96,8 +98,17 @@ def parse_length_buckets(text: str) -> Tuple[int, ...]:
         ) from None
 
 
-def add_bucketing_arguments(parser) -> None:
-    """Add --length-buckets and --bucket-batch-scaling to an argparse parser."""
+def add_batching_arguments(parser) -> None:
+    """Add --num-workers, --length-buckets and --bucket-batch-scaling to an argparse parser."""
+    parser.add_argument(
+        "--num-workers",
+        type=int,
+        default=DEFAULT_NUM_WORKERS,
+        metavar="N",
+        help="Processes that read and prepare reads while the model runs "
+        f"(default: {DEFAULT_NUM_WORKERS}). 0 = do it in the main process, one batch "
+        "after another (slower; for debugging).",
+    )
     default = ", ".join(map(str, DEFAULT_LENGTH_BUCKETS))
     parser.add_argument(
         "--length-buckets",
@@ -151,38 +162,132 @@ class _LengthBucketer:
                 yield bucket
 
 
-def _put(q: queue.Queue, item, stop: threading.Event) -> bool:
-    """Blocking put that gives up (returns False) once ``stop`` is set."""
-    while not stop.is_set():
-        try:
-            q.put(item, timeout=_POLL_S)
-            return True
-        except queue.Full:
-            continue
-    return False
+def _add(counter, n: int) -> None:
+    """Add to a shared multiprocessing counter (see _Pod5BatchDataset)."""
+    if n:
+        with counter.get_lock():
+            counter.value += n
 
 
-def _get(q: queue.Queue, stop: threading.Event):
-    """Blocking get that returns ``_STOPPED`` once ``stop`` is set."""
-    while not stop.is_set():
-        try:
-            return q.get(timeout=_POLL_S)
-        except queue.Empty:
-            continue
-    return _STOPPED
+class _Pod5BatchDataset(IterableDataset):
+    """Reads POD5 and yields collated, length-grouped batches ready for the model.
+
+    Runs inside DataLoader worker processes, so it holds only what preprocessing
+    needs (paths, read ids, settings), never the model. With K workers, worker k
+    takes every K-th read (or every K-th requested read id), so the workers
+    cover all reads exactly once.
+
+    Each worker groups its own reads: a length bucket that reaches its batch size
+    is collated and yielded as one batch, and at the end of the worker's reads
+    its leftover partial buckets are yielded too. Reads therefore reach the model
+    grouped by length, not in POD5 order.
+
+    Memory: per worker, up to sum(batch_size_i - 1) reads can wait in partly
+    filled buckets (num_buckets * (batch_size - 1) without bucket batch scaling),
+    plus the batches the DataLoader prefetches.
+
+    ``counters`` = (reads read, reads failed): shared values, updated from the
+    workers, for the progress bar and the failed-read warning.
+    """
+
+    _COUNT_EVERY = 256  # reads between progress-counter updates
+
+    def __init__(
+        self,
+        pod5_paths: List[str],
+        read_ids: Optional[List[str]],
+        *,
+        preprocess_params: Dict,
+        boundaries: Sequence[int],
+        batch_sizes: Sequence[int],
+        counters,
+    ) -> None:
+        super().__init__()
+        self.pod5_paths = pod5_paths
+        self.read_ids = list(read_ids) if read_ids else None  # empty/None = all reads
+        self.preprocess_params = preprocess_params
+        self.boundaries = list(boundaries)
+        self.batch_sizes = list(batch_sizes)
+        self.counters = counters
+
+    def __iter__(self) -> Iterator[Dict]:
+        info = get_worker_info()
+        worker, num_workers = (info.id, info.num_workers) if info else (0, 1)
+        reads_seen, reads_failed = self.counters
+        bucketer = _LengthBucketer(self.boundaries, self.batch_sizes)
+        uncounted = 0
+
+        with pod5.DatasetReader(
+            self.pod5_paths, recursive=True, max_cached_readers=4, threads=2
+        ) as reader:
+            if self.read_ids is not None:
+                mine = self.read_ids[worker::num_workers]
+                records = iter(()) if not mine else reader.reads(
+                    selection={UUID(r) for r in mine}
+                )
+            else:
+                records = (
+                    rec for i, rec in enumerate(reader.reads()) if i % num_workers == worker
+                )
+
+            for rec in records:
+                sample = None
+                try:
+                    sample = preprocess_signal(
+                        rec.signal, str(rec.read_id), **self.preprocess_params
+                    )
+                except Exception as exc:
+                    _add(reads_failed, 1)
+                    logger.warning("Failed on read %s: %s", rec.read_id, exc)
+                uncounted += 1
+                if uncounted >= self._COUNT_EVERY:
+                    _add(reads_seen, uncounted)
+                    uncounted = 0
+
+                if sample is None:
+                    continue
+                batch = bucketer.add(sample)
+                if batch is not None:
+                    yield collate_fn(batch)
+
+        _add(reads_seen, uncounted)
+        for batch in bucketer.flush():
+            yield collate_fn(batch)
 
 
-def _raise_worker_error(errors: List[BaseException], processed: Optional[int] = None) -> None:
-    if errors:
-        done = "" if processed is None else f" after {processed} read(s)"
-        raise RuntimeError(f"Inference worker failed{done}: {errors[0]!r}") from errors[0]
+def _loader_batches(loader: DataLoader) -> Iterator[Dict]:
+    """Iterate a DataLoader; errors from reading/preprocessing are re-raised as
+    ``RuntimeError("Inference worker failed: ...")``. Use with ``contextlib.closing``
+    so the worker processes are shut down even when the caller stops early."""
+    it = iter(loader)
+    try:
+        while True:
+            try:
+                batch = next(it)
+            except StopIteration:
+                return
+            except Exception as exc:
+                raise RuntimeError(f"Inference worker failed: {exc!r}") from exc
+            yield batch
+    finally:
+        shutdown = getattr(it, "_shutdown_workers", None)  # multi-process iterators only
+        if shutdown is not None:
+            shutdown()
 
 
 class Inference(InferenceBase):
     """
-    Stream reads from POD5, preprocess on CPU, batch on-the-fly,
-    and run inference on GPU.
+    Stream reads from POD5 and run the model on them.
+
+    DataLoader worker processes read the POD5 files, preprocess each read,
+    group reads of similar length and collate them into batches
+    (_Pod5BatchDataset); the main process only runs the model on those
+    batches and turns the outputs into per-read results (_run_gpu_batch).
     """
+
+    # Log the batching settings (warnings, bucket batch sizes)? infer-multi turns
+    # this off on all GPUs but the first, which run with the same settings
+    _log_settings = True
 
     def __init__(
         self,
@@ -191,6 +296,7 @@ class Inference(InferenceBase):
         save_raw: bool = False,
         length_buckets: Optional[Sequence[int]] = DEFAULT_LENGTH_BUCKETS,
         bucket_batch_scaling: float = DEFAULT_BUCKET_BATCH_SCALING,
+        num_workers: int = DEFAULT_NUM_WORKERS,
     ) -> None:
         """
         Args
@@ -208,20 +314,28 @@ class Inference(InferenceBase):
                         about as many tokens as a full batch of the longest
                         reads. The longest bucket always uses batch_size.
                         Raises how many reads wait in memory
+        num_workers   : Processes that read and prepare batches while the model
+                        runs (torch DataLoader workers). 0 = prepare them in the
+                        main process, one batch after another (slower; for
+                        debugging)
         """
         # Validate before loading the model, so bad values fail fast
+        if num_workers < 0:
+            raise ValueError(f"num_workers must be >= 0, got {num_workers}")
+        self.num_workers = int(num_workers)
         self.length_buckets: Tuple[int, ...] = normalize_length_buckets(length_buckets)
         if bucket_batch_scaling < 0:
             raise ValueError(f"bucket_batch_scaling must be >= 0, got {bucket_batch_scaling}")
-        if bucket_batch_scaling and not self.length_buckets:
+        if bucket_batch_scaling and not self.length_buckets and self._log_settings:
             logger.warning("bucket_batch_scaling has no effect without length_buckets")
-        if bucket_batch_scaling > 1:
+        if bucket_batch_scaling > 1 and self._log_settings:
             logger.warning(
                 "bucket_batch_scaling=%s > 1: batches of short reads will hold more tokens "
                 "than a full batch of the longest reads",
                 bucket_batch_scaling,
             )
         self.bucket_batch_scaling = float(bucket_batch_scaling)
+        self._logged_batch_sizes: set = set()  # batch sizes whose bucket table was logged
 
         super().__init__(config=config, device=device)
         self.save_raw = save_raw
@@ -273,8 +387,7 @@ class Inference(InferenceBase):
         """
         if not return_results and output_path is None:
             raise ValueError("Nothing to do: set output_path or return_results=True")
-        bucketing = self._bucketing(batch_size)
-                     
+
         start = time.time()
         pod5_pathset: PathSet = self._resolve_paths(pod5_paths)
         
@@ -304,51 +417,35 @@ class Inference(InferenceBase):
         if show_progress:
             producer_pbar, consumer_pbar = self._make_progress_bars(num_reads)
 
-        # Queue of collated batches, ready for the model
-        batch_queue: "queue.Queue[Optional[Dict]]" = queue.Queue(maxsize=self.queue_size_mult)
-
-        stats = {"failed": 0}
-        stop = threading.Event()
-        errors: List[BaseException] = []
-
-        # Producer thread
-        producer = threading.Thread(
-            target=self._producer_worker,
-            kwargs=dict(
-                pod5_paths=pod5_pathset.paths,
-                read_ids=read_ids,
-                batch_queue=batch_queue,
-                bucketing=bucketing,
-                progress_bar=producer_pbar,
-                stats=stats,
-                stop=stop,
-                errors=errors,
-            ),
-            daemon=True,
-            name="pod5-producer",
-        )
-        producer.start()
+        counters = self._make_counters()
+        loader = self._make_loader(pod5_pathset, read_ids, batch_size, counters)
 
         processed_count = 0
+        reads_seen = 0  # last value shown on the reading bar
         succeeded = False
         try:
-            processed_count = self._consumer_loop(
-                batch_queue=batch_queue,
-                in_memory_results=in_memory_results,
-                zir_manager=zir_manager,
-                progress_bar=consumer_pbar,
-            )
+            with closing(_loader_batches(loader)) as batches:
+                for batch in batches:
+                    for result in self._run_gpu_batch(batch):
+                        if in_memory_results:
+                            in_memory_results.add_result(result)
+                        if zir_manager:
+                            zir_manager.add_result(result)
+                        if consumer_pbar:
+                            consumer_pbar.update(1)
+                        processed_count += 1
+                    if producer_pbar:
+                        reads_seen = self._sync_bar(producer_pbar, counters[0], reads_seen)
+            if producer_pbar:
+                self._sync_bar(producer_pbar, counters[0], reads_seen)
             succeeded = True
         finally:
-            # On failure this unblocks the producer; on success it has already exited.
-            stop.set()
-            producer.join()
             # Shards only get their final .zir names if the whole run succeeded;
             # otherwise they stay readable as .zir.partial.
             if zir_manager:
                 # Final header values; the manager also sets num_reads_processed.
                 metadata.total_inference_time = time.time() - start
-                if succeeded and not errors:
+                if succeeded:
                     zir_manager.close()
                 else:
                     zir_manager.abort()
@@ -356,30 +453,71 @@ class Inference(InferenceBase):
                 if pbar:
                     pbar.close()
 
-        if stats["failed"]:
-            logger.warning("Failed to process %d read(s)", stats["failed"])
-
-        _raise_worker_error(errors, processed_count)
+        self._warn_failed(counters)
 
         # Finalize
         total_time = time.time() - start
 
         if in_memory_results:
             in_memory_results.metadata.total_inference_time = total_time
-            
+
         logger.info(
             "Done – processed %d reads in %.2fs",
             processed_count,
             total_time,
         )
-        
+
         return in_memory_results
+
+    @staticmethod
+    def _make_counters():
+        """Shared (reads read, reads failed) counters the loader workers update."""
+        return multiprocessing.Value("q", 0), multiprocessing.Value("q", 0)
+
+    @staticmethod
+    def _sync_bar(bar, counter, shown: int) -> int:
+        """Advance ``bar`` to ``counter``'s value; return the value now shown."""
+        value = counter.value
+        if value > shown:
+            bar.update(value - shown)
+        return max(value, shown)
+
+    @staticmethod
+    def _warn_failed(counters) -> None:
+        failed = counters[1].value
+        if failed:
+            logger.warning("Failed to process %d read(s)", failed)
+
+    def _make_loader(
+        self,
+        pod5_pathset: PathSet,
+        read_ids: Optional[List[str]],
+        batch_size: int,
+        counters,
+    ) -> DataLoader:
+        """DataLoader yielding collated, length-grouped batches (see _Pod5BatchDataset)."""
+        boundaries, batch_sizes = self._bucketing(batch_size)
+        dataset = _Pod5BatchDataset(
+            [str(p) for p in pod5_pathset.paths],
+            read_ids,
+            preprocess_params=self._preprocess_params,
+            boundaries=boundaries,
+            batch_sizes=batch_sizes,
+            counters=counters,
+        )
+        return DataLoader(
+            dataset,
+            batch_size=None,  # the dataset already yields whole batches
+            num_workers=self.num_workers,
+            pin_memory=self.device.type == "cuda",
+        )
 
     def _bucketing(self, batch_size: int) -> Tuple[Tuple[int, ...], List[int]]:
         """(boundaries, per-bucket batch sizes) for a run with this batch_size."""
         bounds, bucket_batch_scaling = self.length_buckets, self.bucket_batch_scaling
         sizes = bucket_batch_sizes(bounds, batch_size, self.config.max_seq_len, bucket_batch_scaling)
-        if bucket_batch_scaling and bounds:
+        if bucket_batch_scaling and bounds and self._log_settings and batch_size not in self._logged_batch_sizes:
+            self._logged_batch_sizes.add(batch_size)
             edges = (0,) + bounds
             logger.info(
                 "Bucket batch scaling %s (experimental), batch size per bucket: %s",
@@ -429,188 +567,20 @@ class Inference(InferenceBase):
                 print(f"Found target read: {result.read_id}")
         """
         pod5_pathset: PathSet = self._resolve_paths(pod5_paths)
-        bucketing = self._bucketing(batch_size)
+        counters = self._make_counters()
+        loader = self._make_loader(pod5_pathset, read_ids, batch_size, counters)
 
-        # Queue of collated batches, ready for the model
-        batch_queue: "queue.Queue[Optional[Dict]]" = queue.Queue(maxsize=self.queue_size_mult)
+        # closing() also runs when the caller stops iterating early, so the
+        # loader's worker processes are always shut down.
+        with closing(_loader_batches(loader)) as batches:
+            for batch in batches:
+                yield from self._run_gpu_batch(batch)
 
-        # Queue for results
-        result_queue: "queue.Queue[Optional[ReadResultDetailed]]" = queue.Queue(
-            maxsize=batch_size * 2
-        )
-
-        stats = {"failed": 0}
-        stop = threading.Event()
-        errors: List[BaseException] = []
-
-        # Producer thread
-        producer = threading.Thread(
-            target=self._producer_worker,
-            kwargs=dict(
-                pod5_paths=pod5_pathset.paths,
-                read_ids=read_ids,
-                batch_queue=batch_queue,
-                bucketing=bucketing,
-                progress_bar=None,
-                stats=stats,
-                stop=stop,
-                errors=errors,
-            ),
-            daemon=True,
-            name="pod5-producer",
-        )
-        producer.start()
-
-        # GPU consumer thread
-        consumer = threading.Thread(
-            target=self._consumer_iter_worker,
-            kwargs=dict(
-                batch_queue=batch_queue,
-                result_queue=result_queue,
-                stop=stop,
-                errors=errors,
-            ),
-            daemon=True,
-            name="gpu-consumer",
-        )
-        consumer.start()
-
-        # Yield results as they come. The finally block also runs when the caller
-        # stops iterating early, so both threads are always shut down.
-        try:
-            while True:
-                result = result_queue.get()
-                if result is None:
-                    break
-                yield result
-        finally:
-            stop.set()
-            producer.join()
-            consumer.join()
-
-        if stats["failed"]:
-            logger.warning("Failed to process %d read(s)", stats["failed"])
-
-        _raise_worker_error(errors)
-
-    def _producer_worker(
-        self,
-        *,
-        pod5_paths: Union[PathLike, PathLikeList],
-        batch_queue: "queue.Queue[Optional[Dict]]",
-        bucketing: Tuple[Sequence[int], Sequence[int]],
-        read_ids: Optional[List[str]],
-        progress_bar: Optional[tqdm.tqdm],
-        stats: Optional[Dict[str, int]],
-        stop: threading.Event,
-        errors: List[BaseException],
-    ) -> None:
-        """CPU thread: stream reads → standardise → length bucket → collate → queue.
-
-        Each read goes into the bucket of its token count; a bucket that reaches
-        its batch size is collated and queued as one batch. At the end of the
-        input the leftover partial buckets are queued too. Reads therefore reach
-        the model grouped by length, not in POD5 order.
-
-        Memory: besides the queued batches, up to sum(batch_size_i - 1) reads
-        can wait in partly filled buckets (num_buckets * (batch_size - 1)
-        without bucket batch scaling).
-
-        Per-read failures are counted in ``stats``; anything else (e.g. unreadable
-        POD5, bad read id) is recorded in ``errors`` for the caller to raise.
-        """
-        bucketer = _LengthBucketer(*bucketing)
-        try:
-            with pod5.DatasetReader(
-                pod5_paths, recursive=True, max_cached_readers=4, threads=4
-            ) as reader:
-                reads_iter = (
-                    reader.reads(selection={UUID(r) for r in read_ids})
-                    if read_ids
-                    else reader.reads()
-                )
-
-                for rec in reads_iter:
-                    if stop.is_set():
-                        return
-                    sample = None
-                    try:
-                        sample = self._process_record(rec)
-                    except Exception as exc:
-                        stats["failed"] += 1
-                        logger.warning("Failed on read %s: %s", rec.read_id, exc)
-                    finally:
-                        if progress_bar:
-                            progress_bar.update(1)
-                            
-                    if sample is None:
-                        continue
-                    batch = bucketer.add(sample)
-                    if batch is not None and not _put(batch_queue, collate_fn(batch), stop):
-                        return
-
-                for batch in bucketer.flush():
-                    if not _put(batch_queue, collate_fn(batch), stop):
-                        return
-
-        except Exception as exc:
-            errors.append(exc)
-        finally:
-            _put(batch_queue, None, stop)
-            if progress_bar:
-                progress_bar.close()
-
-    def _consumer_loop(
-        self,
-        *,
-        batch_queue: "queue.Queue[Optional[Dict]]",
-        in_memory_results: Optional[InferenceResults],
-        zir_manager: Optional['ZIRShardManager'],
-        progress_bar: Optional[tqdm.tqdm],
-    ) -> int:
-        """Main thread: pop collated batches, run the model, store results."""
-        processed_count = 0
-
-        while (batch := batch_queue.get()) is not None:
-            for result in self._run_gpu_batch(batch):
-                if in_memory_results:
-                    in_memory_results.add_result(result)
-                if zir_manager:
-                    zir_manager.add_result(result)
-                if progress_bar:
-                    progress_bar.update(1)
-                processed_count += 1
-
-        if progress_bar:
-            progress_bar.close()
-            
-        return processed_count
-
-    def _consumer_iter_worker(
-        self,
-        *,
-        batch_queue: "queue.Queue[Optional[Dict]]",
-        result_queue: "queue.Queue[Optional[ReadResultDetailed]]",
-        stop: threading.Event,
-        errors: List[BaseException],
-    ) -> None:
-        """GPU thread for iterator: run collated batches and queue results."""
-        try:
-            while True:
-                batch = _get(batch_queue, stop)
-                if batch is None or batch is _STOPPED:
-                    return
-                for result in self._run_gpu_batch(batch):
-                    if not _put(result_queue, result, stop):
-                        return
-        except Exception as exc:
-            errors.append(exc)
-        finally:
-            _put(result_queue, None, stop)  # Sentinel
+        self._warn_failed(counters)
 
     def _run_gpu_batch(self, batch_t: Dict) -> List[ReadResultDetailed]:
         """Push a collated batch (see collate_fn) to the device, run the model, return results."""
-        inputs = {k: v.to(self.device) for k, v in batch_t["inputs"].items()}
+        inputs = {k: v.to(self.device, non_blocking=True) for k, v in batch_t["inputs"].items()}
         use_amp = (self.config.float_dtype in {"float16", "fp16"}) and (self.device.type != "cpu")
         dtype = torch.float16 if self.config.float_dtype in {"float16", "fp16"} else None
         with torch.no_grad(), torch.amp.autocast(
@@ -618,15 +588,24 @@ class Inference(InferenceBase):
         ):
             outputs = self.model(**inputs)
 
+        # One device->host copy per output for the whole batch (a copy per read
+        # makes the CPU wait on the GPU once per read and output).
+        host = {k: v.cpu().numpy() for k, v in outputs.items()}
+        meta = batch_t["metadata"]
+        num_tokens = meta["num_tokens"].tolist()
+
         results = []
-        for i, read_id in enumerate(batch_t["metadata"]["read_id"]):
-            num_chunks = int(batch_t["metadata"]["num_tokens"][i])
-            cropped = bool(batch_t["metadata"]["cropped"][i])
+        for i, read_id in enumerate(meta["read_id"]):
+            num_chunks = num_tokens[i]
+            cropped = bool(meta["cropped"][i])
+            # Each read gets its own copy, so it doesn't keep the whole batch
+            # array alive. Per-token outputs ([B, T, C]) are cut to the read's
+            # own tokens, dropping the batch padding.
             logits = {
-                k: v[i].cpu().numpy()
-                for k, v in outputs.items()
+                k: (a[i, :num_chunks] if a.ndim == 3 else a[i]).copy()
+                for k, a in host.items()
             }
-            
+
             result = ReadResultDetailed(
                 read_id=read_id,
                 _logits=logits,

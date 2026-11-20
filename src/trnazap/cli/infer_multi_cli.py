@@ -12,7 +12,7 @@ import pod5
 import torch
 
 from ..inference import Inference
-from ..inference.pod5_inferer import add_bucketing_arguments
+from ..inference.pod5_inferer import add_batching_arguments
 from ..io.archive_writer import finalize_tmp_dir, make_tmp_dir, warn_existing_outputs
 from .logging_setup import setup_worker_logging
 
@@ -84,7 +84,7 @@ def register_subparser(subparsers):
         help="Save complete model outputs instead of compressed ones",
     )
 
-    add_bucketing_arguments(parser)
+    add_batching_arguments(parser)
 
     parser.set_defaults(func=run_infer_multi)
 
@@ -106,7 +106,8 @@ class _SharedCounter:
 class _WorkerInference(Inference):
     """Inference whose progress goes to shared counters instead of its own bars."""
 
-    def __init__(self, *args, counters, **kwargs):
+    def __init__(self, *args, counters, log_settings=True, **kwargs):
+        self._log_settings = log_settings  # read by Inference.__init__
         super().__init__(*args, **kwargs)
         self._counters = counters
 
@@ -131,6 +132,7 @@ def _gpu_worker(
     save_raw: bool,
     length_buckets,
     bucket_batch_scaling: float,
+    num_workers: int,
 ):
     setup_worker_logging(log_queue, prefix=f"[GPU {gpu_idx}] ")
     shard_idx = None
@@ -142,7 +144,9 @@ def _gpu_worker(
             save_raw=save_raw,
             length_buckets=length_buckets,
             bucket_batch_scaling=bucket_batch_scaling,
+            num_workers=num_workers,
             counters=counters,
+            log_settings=gpu_idx == 0,  # same settings on every GPU: log them once
         )
         while (job := job_queue.get()) is not None:
             shard_idx, read_ids = job
@@ -251,6 +255,7 @@ def run_infer_multi(args):
                     args.save_raw,
                     args.length_buckets,
                     args.bucket_batch_scaling,
+                    args.num_workers,
                 ),
                 name=f"gpu{gpu_idx}",
             )
