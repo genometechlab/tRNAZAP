@@ -15,7 +15,7 @@ import torch
 from uuid import UUID
 
 from ..config.model_config import ModelConfig, ModelLoader, config_file
-from ..feeders import SequenceStandardizer
+from ..feeders import SequenceStandardizer, standardize_signal
 from ..storages import InferenceResults, InferenceMetadata, ReadResultDetailed
 from ..utils import PathSet
 from ..io import ZIRShardManager
@@ -105,9 +105,7 @@ class InferenceBase(ABC):
     @staticmethod
     def _local_standardize(signal: np.ndarray) -> np.ndarray:
         """Per-read z-score normalisation."""
-        return SequenceStandardizer().fit_transform(
-            [signal.reshape(-1, 1)]
-        )[0].ravel()
+        return standardize_signal(signal)
 
     def _resolve_paths(self, paths: PathLikeList) -> PathSet:
         if isinstance(paths, (str, Path)):

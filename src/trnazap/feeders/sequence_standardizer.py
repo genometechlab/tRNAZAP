@@ -56,3 +56,31 @@ class SequenceStandardizer:
             mean, std = pickle.load(f)
         self.mean_array = mean
         self.std_array = std
+
+
+def standardize_signal(signal: np.ndarray) -> np.ndarray:
+    """Per-read z-score of a 1-D signal, returned as float64.
+
+    Gives exactly the same numbers as
+    ``SequenceStandardizer().fit_transform([signal.reshape(-1, 1)])[0].ravel()``
+    (same dtypes, formula and order of operations), without its per-call
+    overhead: no list/reshape wrapping and no NaN handling, which does nothing
+    for raw nanopore signal (integers, so never NaN or inf). The rare cases
+    where that handling matters (empty signal, variance rounding below zero)
+    fall back to the same ``nan_to_num`` result. Bit-identity is checked by
+    tests/test_standardize_signal.py.
+    """
+    n = signal.shape[0]
+    with np.errstate(divide="ignore", invalid="ignore"):
+        mean = np.float64(signal.sum()) / n
+        mean_sq = np.float64(np.square(signal).sum()) / n
+        # mean * mean, not mean ** 2: the old code squared a float64 *array*
+        # (x * x); a scalar ** 2 can differ from it in the last bit.
+        std = np.sqrt(mean_sq - mean * mean + 1e-8)
+        # Explicit float64, as the old (1, 1)-array arithmetic gave on any numpy
+        # version (a float64 *scalar* would keep float32 on numpy < 2).
+        out = np.subtract(signal, mean, dtype=np.float64)
+        out /= std
+    if not (np.isfinite(mean) and np.isfinite(std)):
+        out = np.nan_to_num(out)
+    return out
