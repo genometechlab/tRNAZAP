@@ -8,11 +8,10 @@ import multiprocessing as mp
 import sys
 from pathlib import Path
 
-import pod5
 import torch
 
 from ..inference import Inference
-from ..inference.pod5_inferer import add_batching_arguments
+from ..inference.pod5_inferer import add_batching_arguments, collect_read_ids
 from ..io.archive_writer import finalize_tmp_dir, make_tmp_dir, warn_existing_outputs
 from .logging_setup import setup_worker_logging
 
@@ -189,11 +188,7 @@ def run_infer_multi(args):
     # 1) collect read IDs once (main process) and split them into chunks
     # ------------------------------------------------------------------
     logger.info("Collecting read IDs …")
-    read_ids_set = set()
-    with pod5.DatasetReader(input_path, recursive=True) as rdr:
-        for rec in rdr:
-            read_ids_set.add(str(rec.read_id))
-    read_ids = list(read_ids_set)
+    read_ids = collect_read_ids(input_path)
     total_reads = len(read_ids)
     if total_reads == 0:
         raise ValueError(f"No reads found in {input_path}")

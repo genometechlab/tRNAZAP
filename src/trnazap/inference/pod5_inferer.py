@@ -162,6 +162,19 @@ class _LengthBucketer:
                 yield bucket
 
 
+def collect_read_ids(pod5_paths) -> List[str]:
+    """All read ids in ``pod5_paths`` (files and/or directories, searched recursively).
+
+    Files are taken in sorted order and reads in on-disk order, duplicates
+    dropped, so the same input always gives the same list. Inference and
+    infer-multi split the work by this list, never by position in the POD5
+    stream: pod5 can return the files of a multi-file dataset in a different
+    order each time it is opened.
+    """
+    with pod5.DatasetReader(pod5_paths, recursive=True, threads=1) as reader:
+        return list(dict.fromkeys(str(r) for r in reader.read_ids))
+
+
 def _add(counter, n: int) -> None:
     """Add to a shared multiprocessing counter (see _Pod5BatchDataset)."""
     if n:
@@ -174,8 +187,9 @@ class _Pod5BatchDataset(IterableDataset):
 
     Runs inside DataLoader worker processes, so it holds only what preprocessing
     needs (paths, read ids, settings), never the model. With K workers, worker k
-    takes every K-th read (or every K-th requested read id), so the workers
-    cover all reads exactly once.
+    takes every K-th read id of ``read_ids`` and asks pod5 for exactly those
+    reads, so the workers cover all reads exactly once. (Splitting by position
+    in the POD5 stream instead is unsafe: see collect_read_ids.)
 
     Each worker groups its own reads: a length bucket that reaches its batch size
     is collated and yielded as one batch, and at the end of the worker's reads
@@ -195,7 +209,7 @@ class _Pod5BatchDataset(IterableDataset):
     def __init__(
         self,
         pod5_paths: List[str],
-        read_ids: Optional[List[str]],
+        read_ids: List[str],
         *,
         preprocess_params: Dict,
         boundaries: Sequence[int],
@@ -204,7 +218,7 @@ class _Pod5BatchDataset(IterableDataset):
     ) -> None:
         super().__init__()
         self.pod5_paths = pod5_paths
-        self.read_ids = list(read_ids) if read_ids else None  # empty/None = all reads
+        self.read_ids = list(read_ids)  # every read to process (see collect_read_ids)
         self.preprocess_params = preprocess_params
         self.boundaries = list(boundaries)
         self.batch_sizes = list(batch_sizes)
@@ -220,15 +234,10 @@ class _Pod5BatchDataset(IterableDataset):
         with pod5.DatasetReader(
             self.pod5_paths, recursive=True, max_cached_readers=4, threads=2
         ) as reader:
-            if self.read_ids is not None:
-                mine = self.read_ids[worker::num_workers]
-                records = iter(()) if not mine else reader.reads(
-                    selection={UUID(r) for r in mine}
-                )
-            else:
-                records = (
-                    rec for i, rec in enumerate(reader.reads()) if i % num_workers == worker
-                )
+            mine = self.read_ids[worker::num_workers]
+            records = iter(()) if not mine else reader.reads(
+                selection={UUID(r) for r in mine}
+            )
 
             for rec in records:
                 sample = None
@@ -390,8 +399,8 @@ class Inference(InferenceBase):
 
         start = time.time()
         pod5_pathset: PathSet = self._resolve_paths(pod5_paths)
-        
-        num_reads = self._get_num_reads(read_ids, pod5_pathset)
+        read_ids = self._resolve_read_ids(read_ids, pod5_pathset)
+        num_reads = len(read_ids)
 
         # One id per run: an infer-multi worker's chunks share the staging dir's.
         run_id = run_id_of_tmp_dir(staging_dir) if staging_dir else new_run_id()
@@ -491,7 +500,7 @@ class Inference(InferenceBase):
     def _make_loader(
         self,
         pod5_pathset: PathSet,
-        read_ids: Optional[List[str]],
+        read_ids: List[str],
         batch_size: int,
         counters,
     ) -> DataLoader:
@@ -567,6 +576,7 @@ class Inference(InferenceBase):
                 print(f"Found target read: {result.read_id}")
         """
         pod5_pathset: PathSet = self._resolve_paths(pod5_paths)
+        read_ids = self._resolve_read_ids(read_ids, pod5_pathset)
         counters = self._make_counters()
         loader = self._make_loader(pod5_pathset, read_ids, batch_size, counters)
 
@@ -619,17 +629,12 @@ class Inference(InferenceBase):
         
         return results
     
-    def _get_num_reads(
-        self,
+    @staticmethod
+    def _resolve_read_ids(
         read_ids: Optional[List[str]],
-        pod5_pathset: PathSet
-    ) -> Optional[int]:
+        pod5_pathset: PathSet,
+    ) -> List[str]:
+        """The given read ids, or all read ids in the input if none (or an empty list) are given."""
         if read_ids:
-            return len(read_ids)
-        try:
-            with pod5.DatasetReader(
-                paths=pod5_pathset.paths, recursive=True
-            ) as reader:
-                return len(reader)
-        except Exception as e:
-            return None
+            return list(read_ids)
+        return collect_read_ids([str(p) for p in pod5_pathset.paths])

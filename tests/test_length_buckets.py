@@ -297,3 +297,38 @@ def test_settings_logging_can_be_turned_off(read_ids, caplog):
         engine.predict(POD5, read_ids=read_ids[:10], batch_size=8, show_progress=False)
     assert not [r for r in caplog.records if "bucket_batch_scaling" in r.getMessage()]
     assert not _table_lines(caplog)
+
+
+# ---------------------------------------------------------------- multi-file input
+
+
+@pytest.fixture(scope="module")
+def split_pod5_dir(tmp_path_factory):
+    """The example POD5 split into 3 files: pod5 may return them in any order."""
+    out = tmp_path_factory.mktemp("split_pod5")
+    with pod5.Reader(POD5) as r:
+        reads = [rec.to_read() for rec in r.reads()]
+    for k in range(3):
+        with pod5.Writer(out / f"part{k}.pod5") as w:
+            w.add_reads(reads[k::3])
+    return out
+
+
+@needs_pod5
+@pytest.mark.parametrize("num_workers", [0, 1, 2, 4])
+def test_multi_file_input_processes_every_read_once(split_pod5_dir, num_workers):
+    with pod5.Reader(POD5) as r:
+        all_ids = sorted(str(rec.read_id) for rec in r.reads())
+    engine = _engine(length_buckets=BUCKETS, num_workers=num_workers)
+    for _ in range(3):  # file order can differ between opens; results must not
+        seen = [res.read_id for res in engine.predict_iter(split_pod5_dir, batch_size=16)]
+        assert sorted(seen) == all_ids
+
+
+@needs_pod5
+def test_collect_read_ids_is_stable(split_pod5_dir):
+    from trnazap.inference.pod5_inferer import collect_read_ids
+
+    first = collect_read_ids(split_pod5_dir)
+    assert len(first) == len(set(first)) == 510
+    assert all(collect_read_ids(split_pod5_dir) == first for _ in range(5))
